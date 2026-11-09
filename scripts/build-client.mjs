@@ -12,7 +12,8 @@
  */
 import { build } from 'esbuild'
 
-await build({
+const result = await build({
+  metafile: true,
   entryPoints: ['src/client/index.ts'],
   outfile: 'lib/client.js',
   bundle: true,
@@ -20,10 +21,12 @@ await build({
   platform: 'browser',
   target: 'es2022',
   sourcemap: 'external',
-  legalComments: 'none',
+  legalComments: 'linked',
   jsx: 'automatic',
   define: { 'process.env.NODE_ENV': '"production"' },
   external: [
+
+    'zod',
     'react',
     'react/jsx-runtime',
     '@deepseek-ai/cordis',
@@ -37,3 +40,9 @@ await build({
   },
   footer: { js: 'return module.exports; } });' },
 })
+
+// Fail closed if a dependency starts requiring a module the host cannot provide.
+const allowed = new Set(['zod', 'react', 'react/jsx-runtime', '@deepseek-ai/cordis', '@deepseek-ai/dsh-client-store', '@deepseek-ai/dsh-client-ui-primitives'])
+for (const output of Object.values(result.metafile.outputs)) {
+  for (const item of output.imports) if (item.external && !allowed.has(item.path)) throw new Error(`Unexpected client external: ${item.path}`)
+}

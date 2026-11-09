@@ -29,6 +29,9 @@ export const FALLBACK_ENDPOINTS = {
 /** Public API base the plan-usage token is scoped to. */
 export const API_BASE_URL = 'https://api.openai.com/v1'
 
+/** Public Responses effort vocabulary; acceptance is model- and entitlement-dependent. */
+export const RESPONSES_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const
+
 /** The `resource` parameter sent on authorize, exchange, and refresh. */
 export const RESOURCE = 'https://api.openai.com/v1'
 
@@ -48,7 +51,7 @@ export const ALL_SCOPES = [...IDENTITY_SCOPES, ...PLAN_SCOPES] as const
 export const PLAN_SCOPE = 'chatgpt.tokens.use.direct'
 
 /** Default `agent_name_hint` shown on the first-registration consent screen. */
-export const DEFAULT_AGENT_NAME_HINT = 'DeepSeek Harness'
+export const DEFAULT_AGENT_NAME_HINT = 'DSH SIWC'
 
 /** Loopback callback path; only the port may vary between attempts. */
 export const CALLBACK_PATH = '/auth/callback'

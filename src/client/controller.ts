@@ -5,9 +5,10 @@
  * @module dsh-chatgpt-siwc/client/controller
  */
 
+import { RESPONSES_EFFORTS } from '../constants.ts'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { ConfigForm as SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 import {
   SiwcCardForm,
   selectField,
@@ -32,8 +33,8 @@ export interface SiwcCardConfig {
   storePath?: string
 }
 
-/** Reasoning efforts the card offers; the adapter's model picker offers the same subset. */
-export const EFFORT_OPTIONS = ['low', 'medium', 'high'] as const
+/** Same reasoning controls as the native provider picker. */
+export const EFFORT_OPTIONS = RESPONSES_EFFORTS
 
 /** What the card renders: the shared shell plus one state per field. */
 export interface SiwcCardState extends SiwcCardShell {

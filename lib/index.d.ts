@@ -10,6 +10,8 @@
  *   OAuth token, issued to this app by dynamic registration.
  * - No sub2api or any other pooling/sharing layer: requests go straight
  *   to `https://api.openai.com/v1` with the signed-in account's token.
+ *   The token is never sent to any other origin except a loopback host
+ *   (local testing); see api-origin.ts.
  * - Effectively only an API surface: one adapter route, one
  *   configurable-provider directory entry, one model-discovery hook,
  *   plus the programmatic exports below (the same functions the CLI
@@ -25,7 +27,7 @@ export declare const inject: string[];
 /** User-settings namespace whose section configures this provider. */
 export declare const SETTINGS_NS = "dsh-chatgpt-siwc";
 /** Provider route registered when the config names none. */
-export declare const DEFAULT_PROVIDER = "chatgpt";
+export declare const DEFAULT_PROVIDER = "siwc-dsh-core";
 export interface PluginConfig {
     /** Provider route to register. Default: `chatgpt`. */
     provider?: string;
@@ -51,25 +53,25 @@ export interface ResolvedConfig {
     streamIdleTimeoutMs?: number;
 }
 export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
-    provider: Schema<string, string, "defined">;
-    agentNameHint: Schema<string, string, "defined">;
-    apiBaseUrl: Schema<string, string, "plain">;
-    reasoningEffort: Schema<string, string, "plain">;
-    storePath: Schema<string, string, "plain">;
-    streamIdleTimeoutMs: Schema<number, number, "plain">;
+    provider: Schema<string, string, "volatile-defined">;
+    agentNameHint: Schema<string, string, "volatile-defined">;
+    apiBaseUrl: Schema<string, string, "volatile">;
+    reasoningEffort: Schema<string, string, "volatile">;
+    storePath: Schema<string, string, "volatile">;
+    streamIdleTimeoutMs: Schema<number, number, "volatile">;
 }>>, Schemastery.ObjectT<NoInfer<{
-    provider: Schema<string, string, "defined">;
-    agentNameHint: Schema<string, string, "defined">;
-    apiBaseUrl: Schema<string, string, "plain">;
-    reasoningEffort: Schema<string, string, "plain">;
-    storePath: Schema<string, string, "plain">;
-    streamIdleTimeoutMs: Schema<number, number, "plain">;
+    provider: Schema<string, string, "volatile-defined">;
+    agentNameHint: Schema<string, string, "volatile-defined">;
+    apiBaseUrl: Schema<string, string, "volatile">;
+    reasoningEffort: Schema<string, string, "volatile">;
+    storePath: Schema<string, string, "volatile">;
+    streamIdleTimeoutMs: Schema<number, number, "volatile">;
 }>>, "plain">;
 export declare function apply(ctx: Context, config?: PluginConfig): void;
 export { ChatGptSiwcAdapter, PROVIDER_DISPLAY_NAME } from './adapter.ts';
 export type { SiwcAdapterOptions } from './adapter.ts';
 export { discoverEndpoints, ensureAccessToken, fetchModels, login, logout, openUrlInBrowser, refreshAccount, } from './oauth.ts';
-export type { CatalogModel, LoginOptions, LoginReporter, LoginResult, SiwcEndpoints, SiwcOverrides, } from './oauth.ts';
+export type { CatalogModel, LoginOptions, LoginReporter, LoginResult, RefreshOptions, SiwcEndpoints, SiwcOverrides, } from './oauth.ts';
 export { AccountsStore, applyTokens, defaultStorePath, isSignedIn, parseScopes, planGranted, publicView, } from './store.ts';
 export type { AccountRecord, AccountsDocument, TokenSet } from './store.ts';
 export { EFFORT_MAP, serializeRequest } from './serialize.ts';
@@ -78,7 +80,12 @@ export type { CallbackOutcome } from './oauth.ts';
 export { parseSseEvents } from './sse.ts';
 export type { SseEvent } from './sse.ts';
 export { describeSubscriptionError, isSubscriptionError, isUsageLimitError, SiwcError, } from './errors.ts';
+export { API_ORIGIN, assertTokenApiBase } from './api-origin.ts';
 export { API_BASE_URL, DEFAULT_AGENT_NAME_HINT, ISSUER, MANAGE_USAGE_URL, PLAN_SCOPE, } from './constants.ts';
 export { SiwcAccountController } from './account-controller.ts';
+export { doctorReport, loadedIdentity } from './doctor.ts';
+export { localizeError, localizeMessage } from './errors.ts';
+export { pageLocale } from './pages.ts';
+export type { Locale } from './i18n.ts';
 export type { SiwcAccountControllerOptions } from './account-controller.ts';
-export type { SiwcAccountIdentity, SiwcAccountAttempt, SiwcAccountStatus, SiwcSignInStart, SiwcSignOutResult } from './account-types.ts';
+export type { SiwcLoginStage, SiwcAccountIdentity, SiwcAccountAttempt, SiwcAccountStatus, SiwcSignInStart, SiwcSignOutResult } from './account-types.ts';

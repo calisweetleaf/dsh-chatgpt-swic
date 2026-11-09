@@ -1,5 +1,13 @@
 # Current repository context
 
+## Candidate: account model index (2026-11-09)
+
+The pinned DSH host uses the SIWC adapter's local account catalog for warm listing and model resolution. Initial seeding and explicit native discovery use the authorized public Models endpoint. The CLI `models` command rebuilds the default-endpoint index and prints model IDs, names and advertised effort IDs only. Catalog policy does not infer an effort when the server omits metadata.
+
+Verified from the clean worktree based on canonical `origin/main`: clean dependency install, typecheck, build, 287 tests, and pack. The native web installation matched all 97 packed files. A live catalog refresh returned eight visible models; GPT-6.1 Terra exposed `ultra` in DSH's native effort menu. The test restored the original model and did not send an inference request.
+
+Release gate remains closed: English/zh-CN catalogs and README parity tests pass, but end-to-end bilingual parity is not certified. The host-facing adapter still creates English-only `LlmError` text in paths such as an SSE disconnect before the terminal event. Do not push before closing this gap and verifying both locales in stock DSH. No private workspace artifacts belong in the standalone repository.
+
 Completed standalone provider version 0.2.0. The public SIWC flow, account vault,
 provider stream, typed browser account controls and staged settings form are
 implemented. The private native Harness port targets a separate API generation.

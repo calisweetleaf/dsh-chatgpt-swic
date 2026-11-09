@@ -21,6 +21,9 @@ export declare class SiwcAccountController extends TypertRemoteService {
     startSignIn(clientId?: string): Promise<SiwcSignInStart>;
     cancelSignIn(attemptId: string): Promise<SiwcAccountStatus>;
     signOut(): Promise<SiwcSignOutResult>;
+    /** Token-free diagnostics (same report as `dsh-chatgpt-siwc doctor`). */
+    diagnose(): Promise<Record<string, unknown>>;
     dispose(): Promise<void>;
+    private log;
     private publicAttempt;
 }

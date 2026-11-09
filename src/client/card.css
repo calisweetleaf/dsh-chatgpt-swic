@@ -171,7 +171,7 @@
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--dsw-alias-label-error);
+  color: var(--dsw-alias-state-error-primary);
 }
 
 .siwc-save {
@@ -196,10 +196,40 @@
   outline: 2px solid var(--dsw-alias-brand-primary);
   outline-offset: 1px;
 }
-.siwc-account{margin-top:1.25rem;padding:1rem;border:1px solid var(--dsh-border,#2f3035);border-radius:12px;background:var(--dsh-surface,#17181b);color:var(--dsh-text,#eee)}
-.siwc-account header,.siwc-account footer{display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap}
-.siwc-account h3{margin:0 0 .25rem;font-size:1rem}.siwc-account p{margin:.35rem 0;color:var(--dsh-text-muted,#aaa)}
-.siwc-account-badge{border-radius:999px;padding:.25rem .65rem;background:#34363b;font-size:.8rem}.siwc-account-badge.is-connected{background:#173a2a;color:#9be0b3}
-.siwc-account-identity{display:grid;gap:.25rem;margin:.9rem 0;padding:.8rem;border-radius:8px;background:var(--dsh-panel,#202125)}.siwc-account-identity span,.siwc-account footer{font-size:.82rem;color:var(--dsh-text-muted,#aaa)}
-.siwc-account button,.siwc-account a{cursor:pointer;color:inherit;border:1px solid var(--dsh-border,#444);border-radius:7px;padding:.45rem .7rem;background:var(--dsh-panel,#242529);text-decoration:none}.siwc-account button:disabled{opacity:.55;cursor:default}
-.siwc-account-error{color:#ff9d9d!important}.siwc-account-pending,.siwc-signout-confirm{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;margin:.75rem 0}
+.siwc-account {
+  margin-top: 20px; padding: 20px; min-width: 0;
+  border: .5px solid var(--dsw-alias-settings-card-stroke);
+  border-radius: var(--dsw-radius-xl);
+  background: var(--dsw-alias-settings-card-fill);
+  color: var(--dsw-alias-label-primary);
+  overflow-wrap: anywhere;
+}
+.siwc-account header, .siwc-account footer {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+.siwc-account h3 { margin: 0 0 4px; font-size: 16px; line-height: 24px; }
+.siwc-account p { margin: 6px 0; color: var(--dsw-alias-label-secondary); line-height: 20px; }
+.siwc-account-badge {
+  border-radius: var(--dsw-radius-sm); padding: 4px 10px;
+  background: var(--dsw-alias-settings-card-fill); font-size: 12px; line-height: 20px;
+}
+.siwc-account-badge.is-connected { color: var(--dsw-alias-state-success-primary); }
+.siwc-account-identity {
+  display: grid; gap: 4px; margin: 16px 0; padding: 12px;
+  border: .5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-lg);
+}
+.siwc-account-identity span, .siwc-account footer { font-size: 13px; line-height: 20px; }
+.siwc-account a { color: var(--dsw-alias-link); overflow-wrap: anywhere; }
+.siwc-account button {
+  min-height: 36px; padding: 6px 12px;
+  border: .5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-md);
+  font: inherit; color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-settings-card-fill); cursor: pointer;
+}
+.siwc-account button:disabled { opacity: .45; cursor: default; }
+.siwc-account :is(button, a):focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 3px; }
+.siwc-account .siwc-account-error { color: var(--dsw-alias-state-error-primary); }
+.siwc-signout-confirm { margin: 12px 0; padding: 12px; border: .5px solid var(--dsw-alias-state-warn-primary); border-radius: var(--dsw-radius-lg); }
+@media (pointer: coarse) { .siwc-account button, .siwc-account a { min-height: 44px; } .siwc-field input { font-size: 16px; } }
+.siwc-account .siwc-account-stage { margin-top: -.15rem; font-size: .8rem; color: var(--dsw-alias-label-secondary, inherit); }

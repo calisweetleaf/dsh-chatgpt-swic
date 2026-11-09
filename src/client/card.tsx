@@ -11,19 +11,30 @@
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { useEffect, useRef } from 'react'
-import { MANAGE_USAGE_URL } from '../constants.ts'
+import { MANAGE_USAGE_URL, RESPONSES_EFFORTS } from '../constants.ts'
 import type { SiwcCardActions } from './card-form.ts'
 import type { SiwcCardFace, SiwcCardState } from './controller.ts'
-import type { SiwcCardLocaleKey } from './locales.ts'
+import { errorLocaleKey, type SiwcCardLocaleKey } from './locales.ts'
 
 /** Props the renderer binds for this card. */
 export type SiwcCardProps =
-  PropsRuntime<'plugins.item'>
+  PropsRuntime<'plugins.bundle.config'>
   & PropsLocale<'dsh-chatgpt-siwc'>
   & InjectFace<SiwcCardFace>
 
-/** The card's copy reader, narrowed to this card's keys. */
-type T = (key: SiwcCardLocaleKey) => string
+/** The card's copy reader, narrowed to this card's keys (`{name}` params interpolated by the host). */
+import { matchErrorMessage } from '../locales/errors.ts'
+
+type T = (key: SiwcCardLocaleKey, params?: Record<string, unknown>) => string
+
+/**
+ * The account error line in the active locale: the plugin's own errors render
+ * from the registered dictionary; anything else (provider text) as given.
+ */
+export function accountErrorText(t: T, state: Pick<import('./account-controller.ts').AccountState, 'message' | 'messageKey' | 'messageParams'>): string | undefined {
+  if (state.messageKey !== undefined) return t(errorLocaleKey(state.messageKey), state.messageParams)
+  return state.message
+}
 
 /**
  * Render the card's one-liner or its configuration form, as the Plugins page asks.
@@ -38,15 +49,22 @@ export function SiwcCard(props: SiwcCardProps) {
   return <><SiwcConfigForm t={t} state={state} face={props} /><SiwcAccountPanel t={t} state={accountState} face={props} /></>
 }
 
-function SiwcAccountPanel({ t, state, face }: { t: T; state: import('./account-controller.ts').AccountState; face: SiwcCardProps }) {
+const STAGE_KEYS = { listening: 'stageListening', authorize: 'stageAuthorize', callback: 'stageCallback', registered: 'stageRegistered', exchange: 'stageExchange', verify: 'stageVerify', save: 'stageSave', done: 'stageDone' } as const
+function stageKey(stage: keyof typeof STAGE_KEYS): (typeof STAGE_KEYS)[keyof typeof STAGE_KEYS] { return STAGE_KEYS[stage] ?? 'stageAuthorize' }
+
+export function SiwcAccountPanel({ t, state, face }: { t: T; state: import('./account-controller.ts').AccountState; face: SiwcCardProps }) {
   const status = state.status
   const pending = status?.attempt?.phase === 'waiting'
+
+  const failure = status?.attempt?.phase === 'failed' ? matchErrorMessage(status.attempt.error ?? '') : undefined
   return <section className="siwc-account" aria-label={t('accountTitle')}>
     <header><div><h3>{t('accountTitle')}</h3><p>{t('accountDescription')}</p></div><span className={status?.signedIn ? 'siwc-account-badge is-connected' : 'siwc-account-badge'}>{status?.signedIn ? t('connected') : t('disconnected')}</span></header>
     {state.loading ? <p role="status">{t('loading')}</p> : null}
     {status?.signedIn ? <div className="siwc-account-identity"><strong>{status.account?.name || status.account?.email || t('connected')}</strong>{status.account?.email && status.account.name ? <span>{status.account.email}</span> : null}<span>{status.account?.planGranted ? t('planReady') : t('planMissing')}</span></div> : null}
     {pending ? <div className="siwc-account-pending"><p>{t('waitingForSignIn')}</p>{status?.attempt?.authorizationUrl ? <a href={status.attempt.authorizationUrl} target="_blank" rel="noreferrer">{t('openSignIn')}</a> : null}<button type="button" onClick={face.cancel} disabled={state.busy}>{t('cancelSignIn')}</button></div> : null}
-    {state.message ? <p role="alert" className="siwc-account-error">{state.message}</p> : null}
+    {status?.attempt?.phase === 'failed' && !state.message && !state.messageKey ? <p role="alert" className="siwc-account-error">{failure ? t(errorLocaleKey(failure.key), failure.params) : t('signInFailed')}</p> : null}
+    {status?.attempt?.phase === 'failed' && status.attempt.stage ? <p className="siwc-account-stage">{t('failedAt', { stage: t(stageKey(status.attempt.stage)) })}{status.attempt.code ? ` · ${status.attempt.code}` : ''}</p> : null}
+    {state.message || state.messageKey ? <p role="alert" className="siwc-account-error">{accountErrorText(t, state)}</p> : null}
     {state.confirmSignOut ? <div className="siwc-signout-confirm"><strong>{t('signOutConfirmTitle')}</strong><p>{t('signOutConfirmBody')}</p><button onClick={face.cancelSignOut}>{t('keepConnected')}</button><button onClick={face.signOut} disabled={state.busy}>{t('signOut')}</button></div> : null}
     <footer>{status?.account?.accessTokenExpiresAt ? <span>{t('tokenRefreshes')} <time dateTime={status.account.accessTokenExpiresAt}>{new Date(status.account.accessTokenExpiresAt).toLocaleString()}</time></span> : null}<button type="button" onClick={face.refresh} disabled={state.loading || state.busy}>{t('refresh')}</button>{!pending && (!status?.signedIn || status.account) ? <button type="button" onClick={face.signIn} disabled={state.busy}>{state.busy ? t('working') : status?.signedIn ? t('reauthorize') : t('signIn')}</button> : null}{status?.signedIn && !state.confirmSignOut && !pending ? <button type="button" onClick={face.requestSignOut} disabled={state.busy}>{t('signOut')}</button> : null}</footer>
   </section>
@@ -95,7 +113,7 @@ function SiwcConfigForm(props: { t: T; state: SiwcCardState; face: SiwcCardActio
         label={t('effortLabel')}
         hint={t('effortHint')}
         defaultLabel={t('effortDefault')}
-        options={['low', 'medium', 'high']}
+        options={RESPONSES_EFFORTS}
         state={state.reasoningEffort}
         disabled={disabled}
         overriddenLabel={t('overridden')}

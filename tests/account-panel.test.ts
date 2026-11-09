@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SiwcAccountController } from '../src/client/account-controller.ts'
+import { SiwcAccountPanel } from '../src/client/card.tsx'
+import { cardEn, cardZh } from '../src/client/locales.ts'
 
 const url = 'https://auth.openai.com/authorize?state=test'
 const idle = { signedIn: false }
@@ -15,10 +17,24 @@ function fixture(initial: object = idle) {
     cancelSignIn: vi.fn(async (_id: string) => ({ ok: true, value: { signedIn: false, attempt: { id: 'owned', phase: 'cancelled' } } })),
     signOut: vi.fn(async () => ({ ok: true, value: { revoked: false } })),
   }
-  const controller = new SiwcAccountController({ remote: { $mount: async () => off, siwcAccount: remote } } as never)
+  const controller = new SiwcAccountController({ remote: { $mount: async () => off }, inject: (_names: string[], callback: (ctx: unknown) => () => void) => { const dispose = callback({ remote: { siwcAccount: remote } }); return { dispose: async () => dispose() } } } as never)
   return { controller, remote, popup, off }
 }
 describe('account panel state', () => {
+  it('renders a localized failed-attempt alert with a usable retry action', () => {
+    for (const dictionary of [cardEn, cardZh]) {
+      const retry = vi.fn()
+      const element = SiwcAccountPanel({
+        t: (key) => dictionary[key as keyof typeof dictionary] ?? key,
+        state: { busy: false, loading: false, confirmSignOut: false, status: { signedIn: false, attempt: { id: 'failed', phase: 'failed', error: 'sensitive details are not displayed' } } },
+        face: { signIn: retry } as never,
+      })
+      const children = element.props.children as Array<{ props?: { role?: string; children?: unknown; onClick?: () => void } } | null>
+      expect(children.find(child => child?.props?.role === 'alert')?.props?.children).toBe(dictionary.signInFailed)
+      const footer = children.find(child => Array.isArray(child?.props?.children) && (child?.props?.children as Array<{ props?: { onClick?: unknown } } | null>).some(item => item?.props?.onClick === retry))
+      expect(footer).toBeDefined()
+    }
+  })
   it('opens the handoff immediately and keeps its link when status polling fails', async () => {
     const f = fixture()
     await tick()

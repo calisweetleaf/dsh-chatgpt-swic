@@ -11,7 +11,7 @@
  *   `prompt_cache_retention`, `truncation`, `metadata`, `user`.
  * - No hosted tools (image generation, code interpreter, file search,
  *   computer use, hosted MCP). Function tools only.
- * - Image/audio input is refused locally with `UNSUPPORTED_CONTENT`
+ * - Image and file input is refused locally with `UNSUPPORTED_CONTENT`
  *   rather than silently dropped.
  *
  * Reasoning blocks are not replayed: with `store: false` there is no
@@ -22,7 +22,12 @@
  */
 
 import { LlmError } from '@deepseek-ai/dsh-llm'
+import { RESPONSES_EFFORTS } from './constants.ts'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
+
+
+/** Legacy 0.1.x histories remain serializable; 0.2.x uses first-class tool messages. */
+type InputBlock = ContentBlock | { type: 'tool-result'; toolCallId: string; content: readonly InputBlock[] }
 
 /** One Responses input item (message, function call, or function output). */
 export type ResponsesInputItem =
@@ -38,26 +43,21 @@ export interface ResponsesRequest {
   input: ResponsesInputItem[]
   tools?: { type: 'function'; name: string; description: string; parameters: Record<string, unknown> }[]
   tool_choice?: 'auto'
-  reasoning?: { effort: string }
+  reasoning?: { effort: string; summary?: 'auto' }
   store: false
   stream: true
 }
 
-/** Harness reasoning efforts mapped onto Responses effort levels (`max` has no Responses spelling). The picker offers the subset in adapter EFFORTS; the serializer accepts this whole table. */
-export const EFFORT_MAP: Record<string, string> = {
-  minimal: 'low',
-  low: 'low',
-  medium: 'medium',
-  high: 'high',
-  xhigh: 'xhigh',
-  max: 'xhigh',
-}
+/** Preserve the selected Responses effort exactly; unsupported model/effort pairs fail upstream. */
+export const EFFORT_MAP: Readonly<Record<string, string>> = Object.freeze(
+  Object.fromEntries(RESPONSES_EFFORTS.map(effort => [effort, effort])),
+)
 
-function flattenText(blocks: readonly ContentBlock[]): string {
+function flattenText(blocks: readonly InputBlock[]): string {
   return blocks.filter(block => block.type === 'text').map(block => block.text).join('')
 }
 
-function assertNoUnsupportedContent(blocks: readonly ContentBlock[], where: string): void {
+function assertNoUnsupportedContent(blocks: readonly InputBlock[], where: string): void {
   for (const block of blocks) {
     if (block.type === 'image' || block.type === 'file') {
       throw new LlmError(
@@ -77,7 +77,7 @@ function assertNoUnsupportedContent(blocks: readonly ContentBlock[], where: stri
  */
 export function serializeRequest(
   options: GenerateOptions,
-  defaults: { reasoningEffort?: string } = {},
+  defaults: { reasoningEffort?: string; reasoningSummary?: boolean } = {},
 ): ResponsesRequest {
   const instructions: string[] = []
   if (options.system !== undefined && options.system.length > 0) instructions.push(options.system)
@@ -85,6 +85,11 @@ export function serializeRequest(
   const input: ResponsesInputItem[] = []
   for (const message of options.messages as readonly Message[]) {
     assertNoUnsupportedContent(message.content, `message ${message.id}`)
+
+    if (message.role === 'tool') {
+      input.push({ type: 'function_call_output', call_id: String(message.toolCallId), output: flattenText(message.content) })
+      continue
+    }
     if (message.role === 'system') {
       const text = flattenText(message.content)
       if (text.length > 0) instructions.push(text)
@@ -97,7 +102,7 @@ export function serializeRequest(
         input.push({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] })
         text = ''
       }
-      for (const block of message.content) {
+      for (const block of message.content as readonly InputBlock[]) {
         if (block.type === 'tool-call') {
           flushText()
           input.push({
@@ -123,7 +128,7 @@ export function serializeRequest(
       text = ''
       emitted = true
     }
-    for (const block of message.content) {
+    for (const block of message.content as readonly InputBlock[]) {
       if (block.type === 'tool-result') {
         flushText()
         input.push({
@@ -165,7 +170,7 @@ export function serializeRequest(
           tool_choice: 'auto' as const,
         }
       : {}),
-    ...(effort !== undefined ? { reasoning: { effort } } : {}),
+    ...(effort !== undefined ? { reasoning: effort === 'none' || defaults.reasoningSummary === false ? { effort } : { effort, summary: 'auto' as const } } : {}),
     store: false,
     stream: true,
   }

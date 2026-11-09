@@ -6,8 +6,8 @@
  * into the Plugins page's `plugins.item` slot — only while the Host serves
  * this plugin's settings namespace — and edits the namespace through the
  * settings scope, so a deployment that never mounts the server half shows no
- * trace of the card. Sign-in stays in the terminal flow
- * (`dsh-chatgpt-siwc login`): the card configures, it does not authenticate.
+ * trace of the card. The account panel also starts browser sign-in and
+ * exposes token-free account state; the CLI remains an alternative.
  *
  * @module dsh-chatgpt-siwc/client
  */
@@ -41,7 +41,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 export const NS = 'dsh-chatgpt-siwc'
 
 /** Services the card needs: slot registration, copy, and the settings scope. */
-export const inject = ['slots', 'locale', 'settingsScope', 'remote']
+export const inject = ['slots', 'locale', 'configForms', 'remote']
 
 /** Id the Plugins page lists the card under. */
 const CARD_ID = 'dsh-chatgpt-siwc'
@@ -72,21 +72,19 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => async () => { await account.dispose() })
   ctx.effect(() => ctx.locale.register(NS, { zh, en }))
   const t = ctx.locale.bind(NS)
-  const controller = new SiwcCardController(ctx.settingsScope.bind<SiwcCardConfig>({ namespace: NS }), account)
+  const controller = new SiwcCardController(ctx.configForms.get<SiwcCardConfig>(NS), account)
   ctx.effect(() => () => { controller.dispose() })
 
-  const describeFace = ctx.settingsScope.describe()
+  const describeFace = ctx.configForms.describe()
   ctx.effect(() => {
     let off: (() => void) | undefined
     const sync = (): void => {
       const served = new Set(describeFace.getSnapshot().view?.namespaces.map(view => view.ns) ?? [])
       const wanted = served.has(NS)
       if (wanted && off === undefined) {
-        off = ctx.slots.inject('plugins.item', () => ctx.slots.register({
-          name: 'plugins.item',
-          id: CARD_ID,
-          order: CARD_ORDER,
-          label: () => t('title'),
+        off = ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
+          name: 'plugins.bundle.config',
+          key: CARD_ID,
           locale: NS,
           inject: () => controller.inject(),
         }, SiwcCard))

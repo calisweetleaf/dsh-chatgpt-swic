@@ -5,8 +5,22 @@
  * "plan active". The callback page is held until the sign-in is validated,
  * so the browser lands on the outcome itself, never on a stale spinner.
  *
+ * Every page takes an optional locale (`zh` | `en`, default `en`) — the
+ * callback server picks it from the request's `Accept-Language` with
+ * `pageLocale(request.headers['accept-language'])` — and sets
+ * `<html lang>` to match (`zh-CN` for `zh`). Error text minted in English
+ * by the OAuth flow is re-rendered in the page's locale when it is one of
+ * this plugin's own messages; unrecognized text (provider detail) is shown
+ * as given.
+ *
  * @module dsh-chatgpt-siwc/pages
  */
+
+import { htmlLang, localeFromAcceptLanguage, type Locale } from './i18n.ts'
+import { localizeMessage } from './errors.ts'
+import { pageMessages, type PageMessageKey } from './locales/pages.ts'
+
+export type { Locale } from './i18n.ts'
 
 const STYLE = `
   :root { color-scheme: light; }
@@ -28,11 +42,11 @@ const STYLE = `
   .fine { font-size: 12px; color: #777; }
 `
 
-function page(title: string, body: string): string {
+function page(locale: Locale, title: string, body: string): string {
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="${htmlLang(locale)}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${title} — DeepSeek Harness</title><style>${STYLE}</style></head>
+<title>${title} — ${pageMessages[locale].titleSuffix}</title><style>${STYLE}</style></head>
 <body><main class="card"><div class="mark">C</div>${body}</main></body></html>`
 }
 
@@ -42,33 +56,58 @@ function escapeHtml(text: string): string {
   ))
 }
 
+/** Untyped callers may pass anything; only `zh` selects Chinese. */
+function supported(locale: Locale | undefined): Locale {
+  return locale === 'zh' ? 'zh' : 'en'
+}
+
+function copy(locale: Locale): (key: PageMessageKey) => string {
+  const dictionary = pageMessages[locale]
+  return key => dictionary[key]
+}
+
+/**
+ * The page locale for a loopback request.
+ * @param acceptLanguage - `request.headers['accept-language']`.
+ * @returns `zh` for any `zh*` range preferred over other supported ones (q-values respected), else `en`.
+ */
+export function pageLocale(acceptLanguage: string | readonly string[] | undefined): Locale {
+  return localeFromAcceptLanguage(acceptLanguage)
+}
+
 /** Shown in the browser tab while the user completes consent on OpenAI's page (the root of the loopback server). */
-export function waitingPage(): string {
-  return page('Signing in', `
-    <h1>Signing in with ChatGPT</h1>
-    <div class="spinner" role="status" aria-label="Waiting"></div>
-    <p>Complete the sign-in in the OpenAI window, and this tab will update.</p>
-    <p class="fine">DeepSeek Harness never sees your ChatGPT password.</p>`)
+export function waitingPage(requested: Locale = 'en'): string {
+  const locale = supported(requested)
+  const t = copy(locale)
+  return page(locale, t('waitingTitle'), `
+    <h1>${t('waitingHeading')}</h1>
+    <div class="spinner" role="status" aria-label="${t('waitingAria')}"></div>
+    <p>${t('waitingBody')}</p>
+    <p class="fine">${t('waitingPassword')}</p>`)
 }
 
 /** Shown on the loopback callback after a validated sign-in. */
-export function successPage(email: string | undefined, plan: boolean, firstTime: boolean): string {
-  return page('Signed in', `
-    <h1 class="ok">You're signed in</h1>
+export function successPage(email: string | undefined, plan: boolean, firstTime: boolean, requested: Locale = 'en'): string {
+  const locale = supported(requested)
+  const t = copy(locale)
+  return page(locale, t('successTitle'), `
+    <h1 class="ok">${t('successHeading')}</h1>
     ${email !== undefined ? `<p>${escapeHtml(email)}</p>` : ''}
     ${plan
-      ? '<p><strong>Using ChatGPT plan</strong> — eligible requests in DeepSeek Harness now draw on your ChatGPT plan.</p>'
-      : '<p class="err">Identity signed in, but ChatGPT plan usage was not granted. Sign in again and approve plan usage to run models.</p>'}
+      ? `<p><strong>${t('planActiveLead')}</strong>${t('planActiveBody')}</p>`
+      : `<p class="err">${t('planMissing')}</p>`}
     ${firstTime && plan
-      ? '<p class="fine">You can review usage and set a per-app cap any time in ChatGPT settings under Usage.</p>'
+      ? `<p class="fine">${t('firstTimeHint')}</p>`
       : ''}
-    <p class="fine">You can close this tab and return to DeepSeek Harness.</p>`)
+    <p class="fine">${t('successClose')}</p>`)
 }
 
 /** Shown on the loopback callback when the flow fails or is denied. */
-export function errorPage(message: string): string {
-  return page('Sign-in failed', `
-    <h1 class="err">Sign-in didn't complete</h1>
-    <p>${escapeHtml(message)}</p>
-    <p class="fine">Return to DeepSeek Harness and run the sign-in again.</p>`)
+export function errorPage(message: string, requested: Locale = 'en'): string {
+  const locale = supported(requested)
+  const t = copy(locale)
+  return page(locale, t('errorTitle'), `
+    <h1 class="err">${t('errorHeading')}</h1>
+    <p>${escapeHtml(localizeMessage(message, locale))}</p>
+    <p class="fine">${t('errorRetry')}</p>`)
 }

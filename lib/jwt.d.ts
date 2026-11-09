@@ -7,6 +7,12 @@
  *
  * @module dsh-chatgpt-siwc/jwt
  */
+/**
+ * Allowed clock difference for exp/nbf/iat. A desktop clock a few seconds
+ * behind auth.openai.com must not reject a freshly issued token (the
+ * official devkit allows 5 s; desktop NTP drift justifies a little more).
+ */
+export declare const CLOCK_TOLERANCE_MS = 30000;
 /** Decode one JWT segment as JSON (no signature check). */
 export declare function decodeSegment(segment: string): Record<string, unknown>;
 /** Split and decode a JWT's header + claims without trusting them. */

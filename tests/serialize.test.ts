@@ -75,23 +75,25 @@ describe('serializeRequest', () => {
     expect(body.tool_choice).toBe('auto')
   })
 
-  it('maps the harness effort vocabulary onto the Responses levels', () => {
-    expect(serializeRequest({ ...baseOptions, reasoningEffort: ReasoningEffortId('minimal') }).reasoning).toEqual({ effort: 'low' })
-    expect(serializeRequest({ ...baseOptions, reasoningEffort: ReasoningEffortId('low') }).reasoning).toEqual({ effort: 'low' })
-    expect(serializeRequest({ ...baseOptions, reasoningEffort: ReasoningEffortId('medium') }).reasoning).toEqual({ effort: 'medium' })
-    expect(serializeRequest({ ...baseOptions, reasoningEffort: ReasoningEffortId('high') }).reasoning).toEqual({ effort: 'high' })
-    expect(serializeRequest({ ...baseOptions, reasoningEffort: ReasoningEffortId('xhigh') }).reasoning).toEqual({ effort: 'xhigh' })
-    expect(serializeRequest({ ...baseOptions, reasoningEffort: ReasoningEffortId('max') }).reasoning).toEqual({ effort: 'xhigh' })
+  it('passes Responses effort levels through without downgrading and requests summaries only with reasoning enabled', () => {
+    expect(serializeRequest({ ...baseOptions, reasoningEffort: ReasoningEffortId('none') }).reasoning).toEqual({ effort: 'none' })
+    expect(serializeRequest({ ...baseOptions, reasoningEffort: ReasoningEffortId('minimal') }).reasoning).toEqual({ effort: 'minimal', summary: 'auto' })
+    expect(serializeRequest({ ...baseOptions, reasoningEffort: ReasoningEffortId('low') }).reasoning).toEqual({ effort: 'low', summary: 'auto' })
+    expect(serializeRequest({ ...baseOptions, reasoningEffort: ReasoningEffortId('medium') }).reasoning).toEqual({ effort: 'medium', summary: 'auto' })
+    expect(serializeRequest({ ...baseOptions, reasoningEffort: ReasoningEffortId('high') }).reasoning).toEqual({ effort: 'high', summary: 'auto' })
+    expect(serializeRequest({ ...baseOptions, reasoningEffort: ReasoningEffortId('xhigh') }).reasoning).toEqual({ effort: 'xhigh', summary: 'auto' })
+    expect(serializeRequest({ ...baseOptions, reasoningEffort: ReasoningEffortId('max') }).reasoning).toEqual({ effort: 'max', summary: 'auto' })
   })
 
   it('materializes the adapter default effort when the request names none', () => {
-    expect(serializeRequest(baseOptions, { reasoningEffort: 'high' }).reasoning).toEqual({ effort: 'high' })
+    expect(serializeRequest(baseOptions, { reasoningEffort: 'high' }).reasoning).toEqual({ effort: 'high', summary: 'auto' })
     expect(serializeRequest(baseOptions).reasoning).toBeUndefined()
+    expect(serializeRequest(baseOptions, { reasoningEffort: 'ultra', reasoningSummary: false }).reasoning).toEqual({ effort: 'ultra' })
   })
 
   it('refuses an effort outside the vocabulary', () => {
-    expect(() => serializeRequest({ ...baseOptions, reasoningEffort: ReasoningEffortId('ultra') }))
-      .toThrow(/unsupported reasoning effort "ultra"/u)
+    expect(() => serializeRequest({ ...baseOptions, reasoningEffort: ReasoningEffortId('unsupported-fixture') }))
+      .toThrow(/unsupported reasoning effort "unsupported-fixture"/u)
   })
 
   it('rejects inherited object keys as reasoning efforts', () => {

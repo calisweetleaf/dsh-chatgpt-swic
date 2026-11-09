@@ -1,7 +1,7 @@
 # Harness bundle insertion for the SIWC provider.
 - insert:
-    - id: chatgpt-siwc
+    - id: dsh-chatgpt-siwc
       name: dsh-chatgpt-siwc
       config:
-        provider: chatgpt
-        agentNameHint: DeepSeek Harness
+        provider: siwc-dsh-core
+        agentNameHint: DSH SIWC

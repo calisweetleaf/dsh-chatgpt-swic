@@ -9,8 +9,9 @@
  *   `ext_agent_host_id` (`urn:uuid:…`). Not a secret.
  *
  * Writes are atomic and serialized through the cross-process writer lock
- * of `dsh-atomic-write`, so a rotating refresh token cannot be spent
- * twice by two processes. A group/world-readable accounts file is
+ * of `dsh-atomic-write`. A refresh holds that lock across its token
+ * exchange and re-reads the record first (see `refreshAccount`), so a
+ * rotating refresh token cannot be spent twice by two processes. A group/world-readable accounts file is
  * refused on POSIX before its contents are read.
  *
  * @module dsh-chatgpt-siwc/store
@@ -21,10 +22,32 @@ import { readFile, stat, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { ISSUER } from './constants.ts'
+import { HTTP_TIMEOUT_MS, ISSUER } from './constants.ts'
+
+import { SiwcError } from './errors.ts'
 
 const FILE_MODE = 0o600
 const DIR_MODE = 0o700
+
+/**
+ * How long a writer waits for the accounts-file lock. The longest legitimate
+ * hold is a refresh: one token-endpoint round trip bounded by
+ * `HTTP_TIMEOUT_MS`, plus file I/O.
+ */
+export const STORE_LOCK_WAIT_MS = HTTP_TIMEOUT_MS + 10_000
+
+
+/** Keep the native lock policy; expose safe, localized operator recovery on timeout. */
+async function accountLock<T>(filename: string, operation: () => Promise<T>, waitMs = STORE_LOCK_WAIT_MS): Promise<T> {
+  try {
+    return await withFileLock(filename, operation, { waitMs })
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('atomic-write: timed out waiting for the writer lock at ')) {
+      throw new SiwcError('The account store is busy or has an orphan writer lock. Stop every DSH and SIWC process, confirm the lock owner is no longer running, then remove only the adjacent .lock file and retry. Never delete or share the account file.', 'STORE_LOCKED')
+    }
+    throw error
+  }
+}
 
 /** One ChatGPT account's registration + credential record (official record shape). */
 export interface AccountRecord {
@@ -50,7 +73,8 @@ export interface AccountRecord {
   /** UTC timestamp of the latest token response. */
   saved_at: string
   /** Last model catalog this account returned (slug + display name), for offline pickers. */
-  models?: { slug: string; displayName: string }[]
+  models?: CatalogModel[]
+  modelsEndpoint?: string
 }
 
 /** The accounts document. */
@@ -81,6 +105,14 @@ export function defaultStorePath(): string {
 /** Split a space-separated scope string into a list. */
 export function parseScopes(scope: string | undefined): string[] {
   return scope === undefined ? [] : scope.split(/\s+/u).filter(part => part.length > 0)
+}
+
+export interface CatalogModel {
+  slug: string
+  displayName: string
+  reasoningEfforts?: string[]
+  defaultReasoningEffort?: string
+  supportsReasoningSummary?: boolean
 }
 
 export class AccountsStore {
@@ -133,12 +165,29 @@ export class AccountsStore {
 
   /** Run one read-modify-write under the cross-process lock. */
   async modify<T>(fn: (doc: AccountsDocument) => Promise<T> | T): Promise<T> {
+    return this.transact(async doc => ({ value: await fn(doc), write: true }))
+  }
+
+  /**
+   * Run one read-decide-(write) cycle under the cross-process writer lock.
+   * The document is re-read after the lock is acquired, so the decision sees
+   * every commit another process made first. `fn` may perform bounded network
+   * work (a token refresh) while holding the lock; it reports whether its
+   * changes to `doc` must be committed. A throw commits nothing, leaving the
+   * stored document exactly as it was.
+   *
+   * Every writer of this file waits up to {@link STORE_LOCK_WAIT_MS}, which
+   * exceeds the longest legitimate hold (one control-plane round trip bounded
+   * by `HTTP_TIMEOUT_MS`), so a contender waits out a refresh instead of
+   * failing while it is in flight.
+   */
+  async transact<T>(fn: (doc: AccountsDocument) => Promise<{ value: T; write: boolean }>): Promise<T> {
     await this.ensureDir()
-    return withFileLock(this.path, async () => {
+    return accountLock(this.path, async () => {
       const doc = await this.readDocument()
-      const result = await fn(doc)
-      await this.writeDocument(doc)
-      return result
+      const { value, write } = await fn(doc)
+      if (write) await this.writeDocument(doc)
+      return value
     })
   }
 
@@ -150,7 +199,7 @@ export class AccountsStore {
     await this.ensureDir()
     // Serialize first creation across processes so concurrent sign-ins cannot
     // advertise different ids for the same host file.
-    return withFileLock(this.hostPath, async () => {
+    return accountLock(this.hostPath, async () => {
       try {
         const parsed: unknown = JSON.parse(await readFile(this.hostPath, 'utf8'))
         const id = (parsed as { ext_agent_host_id?: unknown }).ext_agent_host_id
@@ -206,6 +255,28 @@ export class AccountsStore {
   }
 
   /**
+   * Keep an issued registration (client id only, no tokens, no identity yet)
+   * the moment the callback names it, before the code exchange. Never
+   * overwrites an existing record; becomes active only when no signed-in
+   * account is active, so a failed second sign-in never displaces the first.
+   */
+  async saveRegistration(input: { client_id: string; ext_agent_host_id: string }): Promise<void> {
+    await this.modify((doc) => {
+      if (doc.accounts[input.client_id] !== undefined) return
+      doc.accounts[input.client_id] = {
+        issuer: ISSUER,
+        subject: '',
+        client_id: input.client_id,
+        ext_agent_host_id: input.ext_agent_host_id,
+        scopes: [],
+        saved_at: new Date().toISOString(),
+      }
+      const active = doc.activeClientId === undefined ? undefined : doc.accounts[doc.activeClientId]
+      if (!isSignedIn(active)) doc.activeClientId = input.client_id
+    })
+  }
+
+  /**
    * Replace one account's token set after a refresh. The access token,
    * expiry, scopes, and rotated refresh token move together — never
    * one without the others.
@@ -229,14 +300,7 @@ export class AccountsStore {
   async clearTokens(clientId: string): Promise<void> {
     await this.modify((doc) => {
       const account = doc.accounts[clientId]
-      if (account === undefined) return
-      delete account.access_token
-      delete account.refresh_token
-      delete account.id_token
-      delete account.expires_in
-      delete account.expires_at
-      account.scopes = []
-      account.saved_at = new Date().toISOString()
+      if (account !== undefined) clearTokenFields(account)
     })
   }
 
@@ -259,10 +323,14 @@ export class AccountsStore {
   }
 
   /** Cache one account's model catalog for offline pickers. */
-  async saveModels(clientId: string, models: { slug: string; displayName: string }[]): Promise<void> {
+  async saveModels(identity: Pick<AccountRecord, 'client_id' | 'subject'>, endpoint: string, models: CatalogModel[]): Promise<void> {
     await this.modify((doc) => {
-      const account = doc.accounts[clientId]
-      if (account !== undefined) account.models = models
+      const account = doc.accounts[identity.client_id]
+      if (!isSignedIn(account) || !planGranted(account) || account.subject !== identity.subject) {
+        throw SiwcError.fromKey('catalogAccountChanged', 'CATALOG_ACCOUNT_CHANGED')
+      }
+      account.models = models
+      account.modelsEndpoint = endpoint
     })
   }
 }
@@ -282,6 +350,17 @@ export function applyTokens(account: AccountRecord, tokens: TokenSet): void {
   if (tokens.scope !== undefined) account.scopes = scopes
   account.saved_at = new Date().toISOString()
   if (account.issuer === undefined) account.issuer = ISSUER
+}
+
+/** Drop one record's token set, keeping its registration and identity. */
+export function clearTokenFields(account: AccountRecord): void {
+  delete account.access_token
+  delete account.refresh_token
+  delete account.id_token
+  delete account.expires_in
+  delete account.expires_at
+  account.scopes = []
+  account.saved_at = new Date().toISOString()
 }
 
 /** Whether a record currently holds usable credentials. */

@@ -11,7 +11,7 @@
  *   `prompt_cache_retention`, `truncation`, `metadata`, `user`.
  * - No hosted tools (image generation, code interpreter, file search,
  *   computer use, hosted MCP). Function tools only.
- * - Image/audio input is refused locally with `UNSUPPORTED_CONTENT`
+ * - Image and file input is refused locally with `UNSUPPORTED_CONTENT`
  *   rather than silently dropped.
  *
  * Reasoning blocks are not replayed: with `store: false` there is no
@@ -60,12 +60,13 @@ export interface ResponsesRequest {
     tool_choice?: 'auto';
     reasoning?: {
         effort: string;
+        summary?: 'auto';
     };
     store: false;
     stream: true;
 }
-/** Harness reasoning efforts mapped onto Responses effort levels (`max` has no Responses spelling). The picker offers the subset in adapter EFFORTS; the serializer accepts this whole table. */
-export declare const EFFORT_MAP: Record<string, string>;
+/** Preserve the selected Responses effort exactly; unsupported model/effort pairs fail upstream. */
+export declare const EFFORT_MAP: Readonly<Record<string, string>>;
 /**
  * Build one Responses request from a harness request.
  * @param options - the harness request.
@@ -74,4 +75,5 @@ export declare const EFFORT_MAP: Record<string, string>;
  */
 export declare function serializeRequest(options: GenerateOptions, defaults?: {
     reasoningEffort?: string;
+    reasoningSummary?: boolean;
 }): ResponsesRequest;

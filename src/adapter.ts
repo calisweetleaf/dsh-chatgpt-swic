@@ -31,14 +31,15 @@ import type {
   StreamChunk,
   TokenUsage,
 } from '@deepseek-ai/dsh-llm'
+import { tokenApiUrl } from './api-origin.ts'
 import { API_BASE_URL } from './constants.ts'
 import { describeSubscriptionError, isSubscriptionError, isUsageLimitError, SiwcError } from './errors.ts'
-import { ensureAccessToken, fetchModels } from './oauth.ts'
+import { ensureAccessToken, fetchModels, modelCatalogEndpoint } from './oauth.ts'
 import type { SiwcOverrides } from './oauth.ts'
 import { serializeRequest } from './serialize.ts'
 import { parseSseEvents, SseIdleTimeoutError } from './sse.ts'
-import { planGranted } from './store.ts'
-import type { AccountsStore } from './store.ts'
+import { isSignedIn, planGranted } from './store.ts'
+import type { AccountRecord, AccountsStore, CatalogModel } from './store.ts'
 
 export interface SiwcAdapterOptions {
   /** Account store holding SIWC registrations; a provider keeps it live with config. */
@@ -55,8 +56,6 @@ export interface SiwcAdapterOptions {
 
 /** Display name of the one provider route this adapter serves. */
 export const PROVIDER_DISPLAY_NAME = 'ChatGPT (Sign in with ChatGPT)'
-
-const EFFORTS = ['low', 'medium', 'high'] as const
 
 interface ResponsesUsage {
   input_tokens?: number
@@ -139,12 +138,14 @@ function providerError(code: string | undefined, message: string | undefined, st
 /** Responses usage → harness TokenUsage (input tokens are uncached-only). */
 function mapUsage(u: ResponsesUsage): TokenUsage {
   const cached = u.input_tokens_details?.cached_tokens ?? 0
+  const reasoning = u.output_tokens_details?.reasoning_tokens
+  // The native stream accumulator rejects own properties containing undefined.
   return {
     inputTokens: Math.max(0, (u.input_tokens ?? 0) - cached),
     outputTokens: u.output_tokens ?? 0,
-    totalTokens: u.total_tokens,
-    cacheReadTokens: cached || undefined,
-    reasoningTokens: u.output_tokens_details?.reasoning_tokens,
+    ...(u.total_tokens !== undefined ? { totalTokens: u.total_tokens } : {}),
+    ...(cached ? { cacheReadTokens: cached } : {}),
+    ...(reasoning !== undefined ? { reasoningTokens: reasoning } : {}),
   }
 }
 
@@ -154,6 +155,7 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
   private readonly effortSource: () => string | undefined
   private readonly streamIdleTimeoutSource: () => number
   private readonly fetchFn: typeof fetch
+  private readonly catalogSeeds = new Map<string, Promise<CatalogModel[]>>()
 
   constructor(options: SiwcAdapterOptions) {
     super()
@@ -190,44 +192,63 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
     return { id: provider, name: PROVIDER_DISPLAY_NAME }
   }
 
-  /** The signed-in account's cached catalog (offline-safe). */
-  private async cachedModels(provider: string): Promise<readonly LlmModelInfo[]> {
-    const active = await this.store.active().catch(() => undefined)
-    return (active?.models ?? []).map((m) => ({
-      provider,
-      id: m.slug,
-      name: m.displayName,
-      inputModalities: ['text'] as const,
-    }))
+  private cachedCatalog(account: AccountRecord | undefined, base: string): CatalogModel[] | undefined {
+    return isSignedIn(account) && planGranted(account) && account.modelsEndpoint === modelCatalogEndpoint(base)
+      ? account.models : undefined
+  }
+
+  /** An explicit Cordis discovery request rebuilds the current account's index. */
+  async refreshModelCatalog(signal?: AbortSignal): Promise<CatalogModel[]> {
+    const store = this.store
+    return this.rebuildCatalog(store, await store.active(), this.baseUrlSource(), signal)
+  }
+
+  private async rebuildCatalog(store: AccountsStore, active: AccountRecord | undefined, base: string, signal?: AbortSignal): Promise<CatalogModel[]> {
+    if (!isSignedIn(active) || !planGranted(active)) return []
+    const { account, accessToken } = await ensureAccessToken(store, { overrides: this.overrides() })
+    if (account.client_id !== active.client_id || account.subject !== active.subject || !planGranted(account)) return []
+    const models = await fetchModels(accessToken, { ...this.overrides(), apiBaseUrl: base, signal })
+    signal?.throwIfAborted()
+    await store.saveModels(account, modelCatalogEndpoint(base), models)
+    return models
   }
 
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
-    try {
-      const { account, accessToken } = await ensureAccessToken(this.store, { overrides: this.overrides() })
-      if (!planGranted(account)) return this.cachedModels(provider)
-      const models = await fetchModels(accessToken, { ...this.overrides(), apiBaseUrl: this.baseUrlSource() })
-      await this.store.saveModels(account.client_id, models).catch(() => undefined)
-      return models.map((m) => ({
-        provider,
-        id: m.slug,
-        name: m.displayName,
-        inputModalities: ['text'] as const,
-      }))
-    } catch {
-      return this.cachedModels(provider)
+    const store = this.store
+    const account = await store.active()
+    if (!isSignedIn(account) || !planGranted(account)) return []
+    const base = this.baseUrlSource()
+    const endpoint = modelCatalogEndpoint(base)
+    let models = this.cachedCatalog(account, base)
+    if (models === undefined) {
+      // Bootstrap once for a new account/origin. Warm lists never hit the network.
+      const key = JSON.stringify([store.path, account.client_id, account.subject, endpoint])
+      let pending = this.catalogSeeds.get(key)
+      if (pending === undefined) {
+        pending = this.rebuildCatalog(store, account, base).finally(() => this.catalogSeeds.delete(key))
+        this.catalogSeeds.set(key, pending)
+      }
+      await pending
+      models = this.cachedCatalog(await store.active(), base) ?? []
     }
+    return models.map(m => ({ provider, id: m.slug, name: m.displayName, inputModalities: ['text'] }))
   }
 
   override async resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+    const row = this.cachedCatalog(await this.store.active(), this.baseUrlSource())?.find(entry => entry.slug === model)
+    const configured = this.effortSource()
+    const levels = row?.reasoningEfforts ?? []
     return {
       provider,
       id: model,
-      name: model,
+      name: row?.displayName ?? model,
       inputModalities: ['text'],
-      reasoning: {
-        efforts: EFFORTS.map((id) => ({ id: ReasoningEffortId(id), name: id })),
-        defaultEffort: this.effortSource() === undefined ? undefined : ReasoningEffortId(this.effortSource()!),
-      },
+      ...(levels.length === 0 ? {} : {
+        reasoning: {
+          efforts: levels.map(id => ({ id: ReasoningEffortId(id), name: id })),
+          ...(configured !== undefined && levels.includes(configured) ? { defaultEffort: ReasoningEffortId(configured) } : {}),
+        },
+      }),
     }
   }
 
@@ -266,6 +287,15 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
       yield finishAborted()
       return
     }
+    // Origin gate before any credential work: the bearer token is only ever
+    // attached to the public API origin or a loopback host (api-origin.ts).
+    const base = this.baseUrlSource()
+    let requestUrl: string
+    try {
+      requestUrl = tokenApiUrl(base, '/responses')
+    } catch (err) {
+      throw toLlmError(err)
+    }
     let auth: Awaited<ReturnType<typeof ensureAccessToken>>
     try {
       auth = await ensureAccessToken(this.store, { overrides: this.overrides() })
@@ -287,14 +317,22 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
       return
     }
 
+    const catalogModel = this.cachedCatalog(auth.account, base)?.find(entry => entry.slug === options.model)
+    const effort = options.reasoningEffort ?? this.effortSource()
+    if (effort !== undefined && catalogModel?.reasoningEfforts !== undefined && !catalogModel.reasoningEfforts.includes(effort)) {
+      throw new LlmError(`unsupported reasoning effort "${effort}"`, 'UNSUPPORTED_REASONING_EFFORT')
+    }
     const body = serializeRequest(options, {
-      reasoningEffort: options.reasoningEffort ?? this.effortSource(),
+      reasoningEffort: effort,
+      reasoningSummary: catalogModel?.supportsReasoningSummary,
     })
 
     let response: Response
     try {
-      response = await this.fetchFn(`${this.baseUrlSource()}/responses`, {
+      response = await this.fetchFn(requestUrl, {
         method: 'POST',
+        // A redirect could carry the bearer token or the prompt elsewhere.
+        redirect: 'error',
         headers: {
           authorization: `Bearer ${auth.accessToken}`,
           'content-type': 'application/json',
@@ -445,7 +483,7 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
             type: 'tool-call-delta',
             index: st.index,
             id: ToolCallId(st.callId ?? ''),
-            name: st.name,
+            ...(st.name !== undefined ? { name: st.name } : {}),
             argumentsDelta: delta,
           }
           break

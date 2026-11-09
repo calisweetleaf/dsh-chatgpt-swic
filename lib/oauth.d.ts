@@ -21,13 +21,15 @@
  *    sign-out uses the discovery document's `revocation_endpoint`.
  *
  * Endpoints are read from the OIDC discovery document, with the
- * documented production values as fallback.
+ * documented production values as fallback. A document that does not name
+ * the pinned issuer, or that places any endpoint off the issuer origin, is
+ * not used. Control-plane requests refuse redirects.
  *
  * @module dsh-chatgpt-siwc/oauth
  */
 import { PLAN_SCOPE } from './constants.ts';
 import { AccountsStore } from './store.ts';
-import type { AccountRecord } from './store.ts';
+import type { AccountRecord, CatalogModel } from './store.ts';
 export interface SiwcEndpoints {
     authorizationEndpoint: string;
     tokenEndpoint: string;
@@ -36,6 +38,8 @@ export interface SiwcEndpoints {
 }
 /** Test/embedding seam: override endpoints and fetch. Production uses discovery. */
 export interface SiwcOverrides {
+    /** Controlled tests/embeddings may shorten, never lengthen, the network deadline. */
+    httpTimeoutMs?: number;
     endpoints?: SiwcEndpoints;
     fetchFn?: typeof fetch;
 }
@@ -45,6 +49,8 @@ export declare function discoverEndpoints(overrides?: SiwcOverrides): Promise<Si
 export interface LoginReporter {
     line(text: string): void;
     openUrl?(url: string): void;
+    /** Token-free progress marker; the host records the last one reached. */
+    stage?(stage: import('./account-types.ts').SiwcLoginStage): void;
 }
 export interface LoginOptions {
     store: AccountsStore;
@@ -97,12 +103,38 @@ export type CallbackOutcome = {
     ok: false;
     message: string;
 };
+/** Options for one {@link refreshAccount} call. */
+export interface RefreshOptions {
+    /**
+     * Exchange even when the stored access token is still fresh (default
+     * `true` for a direct call). A refresh another process committed after
+     * `observed` was read is reused either way, never exchanged again.
+     */
+    force?: boolean;
+    /** The record the caller judged stale; read lock-free when omitted. */
+    observed?: AccountRecord;
+}
 /**
- * Refresh one account's access token, serialized per account so two
- * callers never race a rotating refresh token. The replacement token
- * set is stored together, under the store's cross-process lock.
+ * Refresh one account's access token without ever spending one rotating
+ * refresh token twice:
+ *
+ * - In process, concurrent callers for the same store file and client id
+ *   share one in-flight refresh (single flight).
+ * - Across processes, the exchange runs inside the accounts file's writer
+ *   lock. Under the lock the record is re-read; when another process already
+ *   rotated it after `observed` was read (refresh or access token changed),
+ *   or the access token is fresh again and the call is not forced, that
+ *   committed token is returned and no exchange happens. Otherwise the stored
+ *   refresh token is exchanged and the rotated set is committed atomically
+ *   before the lock is released.
+ *
+ * The lock hold is bounded: discovery runs before the lock, and the single
+ * in-lock round trip is bounded by `HTTP_TIMEOUT_MS`. A failed exchange
+ * commits nothing (the previous set stays intact), except a refresh token
+ * the issuer refuses (`invalid_grant`/`invalid_token`), whose tokens are
+ * cleared under the same lock while the registration is kept.
  */
-export declare function refreshAccount(store: AccountsStore, clientId: string, overrides?: SiwcOverrides): Promise<AccountRecord>;
+export declare function refreshAccount(store: AccountsStore, clientId: string, overrides?: SiwcOverrides, options?: RefreshOptions): Promise<AccountRecord>;
 /**
  * The access token for the active (or named) account, refreshing first
  * when it is expired or inside the skew window. Throws
@@ -133,10 +165,8 @@ export declare function logout(store: AccountsStore, options?: {
     email?: string;
 }>;
 /** One model entry from the account's live catalog. */
-export interface CatalogModel {
-    slug: string;
-    displayName: string;
-}
+export type { CatalogModel } from './store.ts';
+export declare function modelCatalogEndpoint(base?: string): string;
 /**
  * The signed-in account's model catalog from `GET /v1/models` — this
  * flow's response is `{models: [{slug, display_name, visibility}]}`

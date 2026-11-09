@@ -23,7 +23,7 @@ describe('Cordis lifecycle', () => {
     const fiber = ctx.plugin(apply, { storePath: storePath() })
     await fiber
     expect(llm.listProviders()).toHaveLength(1)
-    expect(llm.listConfigurableProviders().map(({ provider }) => provider)).toContain('chatgpt')
+    expect(llm.listConfigurableProviders().map(({ provider }) => provider)).toContain('siwc-dsh-core')
 
     await fiber.dispose()
     expect(llm.listProviders()).toEqual([])
@@ -33,7 +33,7 @@ describe('Cordis lifecycle', () => {
   it('removes the adapter when directory registration rejects during load', async () => {
     const { ctx, llm } = setup()
     const blocker = llm.registerConfigurableProviders([{
-      provider: 'chatgpt', displayName: 'Collision', settingsNs: 'other', settingsPath: [],
+      provider: 'siwc-dsh-core', displayName: 'Collision', settingsNs: 'other', settingsPath: [],
     }])
     const fiber = ctx.plugin(apply, { storePath: storePath() })
     await expect(fiber).rejects.toThrow()

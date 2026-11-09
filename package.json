@@ -1,7 +1,7 @@
 {
   "name": "dsh-chatgpt-siwc",
-  "version": "0.2.0",
-  "description": "DeepSeek Harness plugin: use your ChatGPT Plus/Pro plan through the official Sign in with ChatGPT (SIWC) open-source flow — dynamic OAuth registration, public Responses API, no Codex backend, no sub2api pooling.",
+  "version": "0.2.1-rc.3",
+  "description": "Sign in with ChatGPT provider for DeepSeek Harness · 为 DeepSeek Harness 提供 ChatGPT 登录与套餐模型接入",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -11,7 +11,11 @@
     "sign-in-with-chatgpt",
     "siwc",
     "oauth",
-    "openai"
+    "openai",
+    "deepseek",
+    "cordis",
+    "chatgpt-plus",
+    "llm-provider"
   ],
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -26,15 +30,24 @@
     "./client": {
       "default": "./lib/client.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./icon": "./visual/icon.svg",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "lib",
     "src",
+    "docs",
     "cordis.patch.yml",
     "visual",
     "README.md",
-    "LICENSE"
+    "README.zh-CN.md",
+    "LICENSE",
+    "CONTRIBUTING.md",
+    "CONTRIBUTING.zh-CN.md",
+    "SECURITY.md",
+    "locale/*.json"
   ],
   "scripts": {
     "build": "node node_modules/typescript/bin/tsc -p tsconfig.build.json && node scripts/build-client.mjs && node --input-type=module -e \"import { chmodSync } from 'node:fs'; chmodSync('lib/bin.js', 0o755)\"",
@@ -58,18 +71,18 @@
     }
   },
   "dependencies": {
-    "@deepseek-ai/dsh-atomic-write": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-home-paths": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-typert-protocol": "^0.1.6-alpha.2",
-    "@deepseek-ai/schemastery": "^3.18.2",
     "eventsource-parser": "^4.1.0",
     "zod": "^4.6.7"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-commands": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-llm": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-settings": "0.1.6-alpha.1"
+    "@deepseek-ai/dsh-atomic-write": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-commands": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-home-paths": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-llm": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-settings": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-typert-protocol": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/schemastery": "^3.18.2"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-commands": {
@@ -81,25 +94,37 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
-    "@deepseek-ai/dsh-api-remotes": "^0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-locale": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-store": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-plugin-manager": "0.1.6-alpha.2",
-    "@deepseek-ai/dsh-client-ui-primitives": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-renderer": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-settings": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-slots": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-llm": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-settings": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-api-remotes": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-atomic-write": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-locale": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-store": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-plugin-manager": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-home-paths": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-settings": "0.2.2-rc.1",
     "@types/node": "^22.10.0",
     "@types/react": "~18.3.1",
     "esbuild": "^0.28.0",
     "immer": "^11.2.9",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.8",
-    "zustand": "~4.4.7"
+    "vitest": "^4.1.12",
+    "zustand": "~4.4.7",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.2"
   },
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.2-rc.1 <0.3.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/calisweetleaf/dsh-chatgpt-siwc.git"
+  },
+  "bugs": {
+    "url": "https://github.com/calisweetleaf/dsh-chatgpt-siwc/issues"
   }
 }

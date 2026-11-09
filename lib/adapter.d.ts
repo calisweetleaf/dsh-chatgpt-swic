@@ -22,7 +22,7 @@
  */
 import { LlmAdapter } from '@deepseek-ai/dsh-llm';
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm';
-import type { AccountsStore } from './store.ts';
+import type { AccountsStore, CatalogModel } from './store.ts';
 export interface SiwcAdapterOptions {
     /** Account store holding SIWC registrations; a provider keeps it live with config. */
     store: AccountsStore | (() => AccountsStore);
@@ -43,13 +43,16 @@ export declare class ChatGptSiwcAdapter extends LlmAdapter {
     private readonly effortSource;
     private readonly streamIdleTimeoutSource;
     private readonly fetchFn;
+    private readonly catalogSeeds;
     constructor(options: SiwcAdapterOptions);
     /** The account store as currently configured (a live source resolves per call). */
     private get store();
     private overrides;
     providerInfo(provider: string): LlmProviderInfo;
-    /** The signed-in account's cached catalog (offline-safe). */
-    private cachedModels;
+    private cachedCatalog;
+    /** An explicit Cordis discovery request rebuilds the current account's index. */
+    refreshModelCatalog(signal?: AbortSignal): Promise<CatalogModel[]>;
+    private rebuildCatalog;
     listModels(provider: string): Promise<readonly LlmModelInfo[]>;
     resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo>;
     /** A non-2xx response before the stream opens (admission failure). */

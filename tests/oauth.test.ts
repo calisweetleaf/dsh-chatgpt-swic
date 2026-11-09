@@ -90,7 +90,7 @@ const callbackUrlOf = (authUrl: URL): string => authUrl.searchParams.get('redire
 async function runLogin(
   store: AccountsStore,
   provider: ReturnType<typeof fakeProvider>,
-  options: { clientId?: string } = {},
+  options: { clientId?: string; acceptLanguage?: string } = {},
 ): Promise<{ result: Awaited<ReturnType<typeof login>>; page: string; authUrl: URL }> {
   const capture = urlCapture()
   const loginPromise = login({
@@ -112,12 +112,34 @@ async function runLogin(
   const page = await fetch(
     `${callbackUrlOf(authUrl)}?code=code-1&state=${authUrl.searchParams.get('state')}`
     + `&client_id=oaiapp_issued&scope=${encodeURIComponent('openid chatgpt.tokens.use.direct')}`,
+    options.acceptLanguage === undefined ? undefined : { headers: { 'accept-language': options.acceptLanguage } },
   )
   const outcome = await settled
   if (!outcome.ok) throw outcome.error
   const result = outcome.result
   return { result, page: await page.text(), authUrl }
 }
+
+describe('login (zh)', () => {
+  it('serves the held outcome page in Chinese for a zh browser', async () => {
+    const store = tempStore()
+    const provider = fakeProvider()
+    const { page } = await runLogin(store, provider, { acceptLanguage: 'zh-CN,zh;q=0.9,en;q=0.8' })
+    expect(page).toContain('<html lang="zh-CN">')
+    expect(page).toContain('登录成功')
+  })
+  it('localizes the immediate failure page', async () => {
+    const capture = urlCapture()
+    const loginPromise = login({ store: tempStore(), agentNameHint: 'T', openBrowser: false, reporter: capture.reporter, overrides: { endpoints: ENDPOINTS, fetchFn: vi.fn() } })
+    const authUrl = await capture.url
+    const rejection = expect(loginPromise).rejects.toMatchObject({ code: 'AUTHORIZATION_FAILED' })
+    const response = await fetch(`${callbackUrlOf(authUrl)}?code=c&state=wrong`, { headers: { 'accept-language': 'zh-CN' } })
+    const html = await response.text()
+    expect(html).toContain('<html lang="zh-CN">')
+    expect(html).toContain('登录回调的 state 与本次尝试不匹配')
+    await rejection
+  })
+})
 
 describe('login', () => {
   it('signs in end to end: authorize URL contract, held outcome page, validated record', async () => {
@@ -400,16 +422,17 @@ describe('logout', () => {
 describe('discoverEndpoints', () => {
   it('reads the live endpoints from the discovery document', async () => {
     const fetchFn: typeof fetch = async () => jsonResponse({
-      authorization_endpoint: 'https://live/auth',
-      token_endpoint: 'https://live/token',
-      jwks_uri: 'https://live/jwks',
-      revocation_endpoint: 'https://live/revoke',
+      issuer: ISSUER,
+      authorization_endpoint: `${ISSUER}/live/auth`,
+      token_endpoint: `${ISSUER}/live/token`,
+      jwks_uri: `${ISSUER}/live/jwks`,
+      revocation_endpoint: `${ISSUER}/live/revoke`,
     })
     await expect(discoverEndpoints({ fetchFn })).resolves.toEqual({
-      authorizationEndpoint: 'https://live/auth',
-      tokenEndpoint: 'https://live/token',
-      jwksUri: 'https://live/jwks',
-      revocationEndpoint: 'https://live/revoke',
+      authorizationEndpoint: `${ISSUER}/live/auth`,
+      tokenEndpoint: `${ISSUER}/live/token`,
+      jwksUri: `${ISSUER}/live/jwks`,
+      revocationEndpoint: `${ISSUER}/live/revoke`,
     })
   })
 
@@ -444,10 +467,10 @@ describe('fetchModels', () => {
         ],
       })
     }
-    await expect(fetchModels('at-1', { apiBaseUrl: 'https://plan.test/v1', fetchFn })).resolves.toEqual([
+    await expect(fetchModels('at-1', { apiBaseUrl: 'http://127.0.0.1:8787/v1', fetchFn })).resolves.toEqual([
       { slug: 'gpt-test', displayName: 'GPT Test' },
     ])
-    expect(requests).toEqual(['https://plan.test/v1/models'])
+    expect(requests).toEqual(['http://127.0.0.1:8787/v1/models'])
   })
 })
 

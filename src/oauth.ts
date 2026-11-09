@@ -21,7 +21,9 @@
  *    sign-out uses the discovery document's `revocation_endpoint`.
  *
  * Endpoints are read from the OIDC discovery document, with the
- * documented production values as fallback.
+ * documented production values as fallback. A document that does not name
+ * the pinned issuer, or that places any endpoint off the issuer origin, is
+ * not used. Control-plane requests refuse redirects.
  *
  * @module dsh-chatgpt-siwc/oauth
  */
@@ -29,9 +31,12 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
+import { resolve as resolvePath } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { tokenApiUrl } from './api-origin.ts'
 import {
   ALL_SCOPES,
+  API_BASE_URL,
   CALLBACK_DEADLINE_MS,
   CALLBACK_PATH,
   DISCOVERY_URL,
@@ -43,12 +48,14 @@ import {
   PREFERRED_CALLBACK_PORT,
   REFRESH_SKEW_MS,
   RESOURCE,
+  RESPONSES_EFFORTS,
 } from './constants.ts'
 import { SiwcError, describeSubscriptionError } from './errors.ts'
 import { verifyIdToken } from './jwt.ts'
-import { errorPage, successPage, waitingPage } from './pages.ts'
-import { AccountsStore, applyTokens, isSignedIn, planGranted } from './store.ts'
-import type { AccountRecord, TokenSet } from './store.ts'
+import { errorPage, pageLocale, successPage, waitingPage } from './pages.ts'
+import type { Locale } from './i18n.ts'
+import { AccountsStore, applyTokens, clearTokenFields, isSignedIn, planGranted } from './store.ts'
+import type { AccountRecord, CatalogModel, TokenSet } from './store.ts'
 
 export interface SiwcEndpoints {
   authorizationEndpoint: string
@@ -59,6 +66,9 @@ export interface SiwcEndpoints {
 
 /** Test/embedding seam: override endpoints and fetch. Production uses discovery. */
 export interface SiwcOverrides {
+
+  /** Controlled tests/embeddings may shorten, never lengthen, the network deadline. */
+  httpTimeoutMs?: number
   endpoints?: SiwcEndpoints
   fetchFn?: typeof fetch
 }
@@ -69,7 +79,7 @@ const DISCOVERY_TTL_MS = 60 * 60 * 1000
 /** Resolve the live endpoints from the discovery document (cached), falling back to the documented values. */
 export async function discoverEndpoints(overrides?: SiwcOverrides): Promise<SiwcEndpoints> {
   if (overrides?.endpoints !== undefined) return overrides.endpoints
-  const fetchFn = timedFetch(overrides?.fetchFn ?? fetch)
+  const fetchFn = timedFetch(overrides?.fetchFn ?? fetch, undefined, overrides?.httpTimeoutMs)
   const now = Date.now()
   if (discoveryCache !== undefined && now - discoveryCache.fetchedAt < DISCOVERY_TTL_MS) {
     return discoveryCache.endpoints
@@ -78,13 +88,18 @@ export async function discoverEndpoints(overrides?: SiwcOverrides): Promise<Siwc
     const response = await fetchFn(DISCOVERY_URL)
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     const doc = (await response.json()) as Record<string, unknown>
+    // The document must name this issuer, and every endpoint it supplies must
+    // live on the issuer's own origin: a tampered or misrouted document can
+    // never move the code/refresh-token exchange, the JWKS, or revocation
+    // elsewhere. A document that fails either check is not used at all.
+    if (doc['issuer'] !== ISSUER) throw new Error('discovery issuer mismatch')
     const endpoints: SiwcEndpoints = {
-      authorizationEndpoint: stringOr(doc['authorization_endpoint'], FALLBACK_ENDPOINTS.authorizationEndpoint),
-      tokenEndpoint: stringOr(doc['token_endpoint'], FALLBACK_ENDPOINTS.tokenEndpoint),
-      jwksUri: stringOr(doc['jwks_uri'], FALLBACK_ENDPOINTS.jwksUri),
-      ...(typeof doc['revocation_endpoint'] === 'string'
-        ? { revocationEndpoint: doc['revocation_endpoint'] }
-        : {}),
+      authorizationEndpoint: issuerEndpoint(doc['authorization_endpoint'], FALLBACK_ENDPOINTS.authorizationEndpoint),
+      tokenEndpoint: issuerEndpoint(doc['token_endpoint'], FALLBACK_ENDPOINTS.tokenEndpoint),
+      jwksUri: issuerEndpoint(doc['jwks_uri'], FALLBACK_ENDPOINTS.jwksUri),
+      ...(doc['revocation_endpoint'] === undefined
+        ? {}
+        : { revocationEndpoint: issuerEndpoint(doc['revocation_endpoint'], undefined) }),
     }
     discoveryCache = { endpoints, fetchedAt: now }
     return endpoints
@@ -93,8 +108,20 @@ export async function discoverEndpoints(overrides?: SiwcOverrides): Promise<Siwc
   }
 }
 
-function stringOr(value: unknown, fallback: string): string {
-  return typeof value === 'string' && value.length > 0 ? value : fallback
+const ISSUER_ORIGIN = new URL(ISSUER).origin
+
+/** An absent endpoint takes its documented fallback; a present one must be an issuer-origin URL. */
+function issuerEndpoint<F extends string | undefined>(value: unknown, fallback: F): string | F {
+  if (value === undefined || value === null || value === '') {
+    if (fallback === undefined) throw new Error('discovery endpoint missing')
+    return fallback
+  }
+  if (typeof value !== 'string') throw new Error('discovery endpoint is not a string')
+  const url = new URL(value)
+  if (url.origin !== ISSUER_ORIGIN || url.username !== '' || url.password !== '') {
+    throw new Error('discovery endpoint is not on the issuer origin')
+  }
+  return value
 }
 
 function base64url(bytes: Buffer): string {
@@ -107,14 +134,26 @@ function boundedSignal(signal?: AbortSignal): AbortSignal {
 }
 
 /** One fetch bound to caller cancellation and the control-plane timeout. */
-function timedFetch(fetchFn: typeof fetch, signal?: AbortSignal): typeof fetch {
-  return (input, init) => fetchFn(input, { ...init, signal: boundedSignal(init?.signal ?? signal) })
+function timedFetch(fetchFn: typeof fetch, signal?: AbortSignal, timeoutMs = HTTP_TIMEOUT_MS): typeof fetch {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > HTTP_TIMEOUT_MS) throw new RangeError('invalid control-plane deadline')
+  return async (input, init) => {
+    const caller = init?.signal ?? signal
+    const deadline = AbortSignal.timeout(timeoutMs)
+    try {
+      return await fetchFn(input, { ...init, signal: AbortSignal.any([...(caller ? [caller] : []), deadline]) })
+    } catch (error) {
+      if (deadline.aborted && !caller?.aborted) throw new SiwcError('ChatGPT connection timed out. Check your network and retry; the saved account was not changed.', 'NETWORK_TIMEOUT')
+      throw error
+    }
+  }
 }
 
 /** Human-facing sink for sign-in progress. */
 export interface LoginReporter {
   line(text: string): void
   openUrl?(url: string): void
+  /** Token-free progress marker; the host records the last one reached. */
+  stage?(stage: import('./account-types.ts').SiwcLoginStage): void
 }
 
 export interface LoginOptions {
@@ -212,6 +251,8 @@ async function postTokenForm(
 ): Promise<TokenResponse> {
   const response = await fetchFn(endpoints.tokenEndpoint, {
     method: 'POST',
+    // A 307/308 would replay the code or refresh token to another origin.
+    redirect: 'error',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(form).toString(),
   })
@@ -238,7 +279,7 @@ async function postTokenForm(
  */
 export async function login(options: LoginOptions): Promise<LoginResult> {
   const { store, reporter } = options
-  const fetchFn = timedFetch(options.overrides?.fetchFn ?? fetch, options.signal)
+  const fetchFn = timedFetch(options.overrides?.fetchFn ?? fetch, options.signal, options.overrides?.httpTimeoutMs)
   const endpoints = await discoverEndpoints({ ...options.overrides, fetchFn })
   const hostId = await store.hostId()
 
@@ -255,6 +296,8 @@ export async function login(options: LoginOptions): Promise<LoginResult> {
     ...(existing === undefined ? {} : { existing }),
   }
 
+  const mark = (stage: import('./account-types.ts').SiwcLoginStage): void => { try { reporter?.stage?.(stage) } catch { /* progress only */ } }
+  mark('listening')
   const callback = await startCallbackServer(pending, reporter)
   pending.redirectUri = `http://127.0.0.1:${callback.port}${CALLBACK_PATH}`
   const authorizeUrl = buildAuthorizeUrl({ endpoints, pending, hostId, agentNameHint: options.agentNameHint })
@@ -266,9 +309,11 @@ export async function login(options: LoginOptions): Promise<LoginResult> {
   printableUrl.searchParams.delete('id_token_hint')
   reporter?.line(printableUrl.toString())
   if (options.openBrowser !== false) openUrlInBrowser(authorizeUrl, reporter)
+  mark('authorize')
 
   try {
     const result = await callback.wait(options.signal)
+    mark('callback')
     // The loopback tab is held open, so every post-callback failure below
     // still renders its outcome there before the attempt closes.
     let record: AccountRecord
@@ -284,7 +329,19 @@ export async function login(options: LoginOptions): Promise<LoginResult> {
       if (existing === undefined && issuedClientId === DYNAMIC_CLIENT_ID) {
         throw new SiwcError('registration callback returned no issued client id', 'REGISTRATION_INCOMPLETE')
       }
+      if (!/^[A-Za-z0-9_-]{1,200}$/u.test(issuedClientId)) {
+        throw new SiwcError('registration callback returned a malformed client id', 'REGISTRATION_INCOMPLETE')
+      }
+      // Official devkit order: keep the issued registration BEFORE the one-time
+      // code exchange. If the exchange, identity check or save then fails, the
+      // next attempt reauthorizes this app instead of registering yet another
+      // one on the user's ChatGPT account.
+      if (existing === undefined) {
+        await store.saveRegistration({ client_id: issuedClientId, ext_agent_host_id: hostId })
+        mark('registered')
+      }
 
+      mark('exchange')
       const tokens = await postTokenForm(endpoints, {
         grant_type: 'authorization_code',
         client_id: issuedClientId,
@@ -297,6 +354,7 @@ export async function login(options: LoginOptions): Promise<LoginResult> {
       if (tokens.id_token === undefined) {
         throw new SiwcError('token response carried no ID token; identity cannot be validated', 'TOKEN_EXCHANGE_FAILED')
       }
+      mark('verify')
       const identity = await verifyIdToken(tokens.id_token, {
         jwksUri: endpoints.jwksUri,
         issuer: ISSUER,
@@ -304,7 +362,8 @@ export async function login(options: LoginOptions): Promise<LoginResult> {
         nonce: pending.nonce,
         fetchFn,
       })
-      if (existing !== undefined && identity.subject !== existing.subject) {
+      // A registration kept before a failed exchange has no subject yet.
+      if (existing !== undefined && existing.subject !== '' && identity.subject !== existing.subject) {
         throw new SiwcError('signed-in identity does not match the selected account', 'IDENTITY_MISMATCH')
       }
 
@@ -326,6 +385,7 @@ export async function login(options: LoginOptions): Promise<LoginResult> {
         record.scopes = granted.filter(s => s.length > 0)
       }
       options.signal?.throwIfAborted()
+      mark('save')
       await store.saveSignIn(record)
       plan = planGranted(record)
       firstTime = existing === undefined && !(await store.welcomed().catch(() => false))
@@ -334,6 +394,7 @@ export async function login(options: LoginOptions): Promise<LoginResult> {
       callback.finish({ ok: false, message: error instanceof Error ? error.message : String(error) })
       throw error
     }
+    mark('done')
     callback.finish({
       ok: true,
       ...(record.email === undefined ? {} : { email: record.email }),
@@ -367,6 +428,7 @@ function startCallbackServer(pending: PendingAttempt, reporter?: LoginReporter):
   return new Promise((resolvePromise, rejectPromise) => {
     let settled = false
     let held: ServerResponse | undefined
+    let heldLocale: Locale = 'en'
     let deadline: NodeJS.Timeout | undefined
     let arrivalDeadline: NodeJS.Timeout | undefined
     let resolveWait: (value: { code: string; clientId?: string; scope?: string }) => void
@@ -393,18 +455,19 @@ function startCallbackServer(pending: PendingAttempt, reporter?: LoginReporter):
       held = undefined
       if (outcome.ok) {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-        response.end(successPage(outcome.email, outcome.plan, outcome.firstTime))
+        response.end(successPage(outcome.email, outcome.plan, outcome.firstTime, heldLocale))
       } else {
         response.writeHead(400, { 'content-type': 'text/html; charset=utf-8' })
-        response.end(errorPage(outcome.message))
+        response.end(errorPage(outcome.message, heldLocale))
       }
     }
 
     const server = createServer((request: IncomingMessage, response: ServerResponse) => {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+      const locale = pageLocale(request.headers['accept-language'])
       if (url.pathname === '/') {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-        response.end(waitingPage())
+        response.end(waitingPage(locale))
         return
       }
       if (url.pathname !== CALLBACK_PATH) {
@@ -414,7 +477,7 @@ function startCallbackServer(pending: PendingAttempt, reporter?: LoginReporter):
       }
       const fail = (message: string): void => {
         response.writeHead(400, { 'content-type': 'text/html; charset=utf-8' })
-        response.end(errorPage(message))
+        response.end(errorPage(message, locale))
         if (!settled) {
           settled = true
           rejectWait(new SiwcError(message, 'AUTHORIZATION_FAILED'))
@@ -438,7 +501,7 @@ function startCallbackServer(pending: PendingAttempt, reporter?: LoginReporter):
       }
       if (settled) {
         response.writeHead(400, { 'content-type': 'text/html; charset=utf-8' })
-        response.end(errorPage('This sign-in attempt already completed. Start the sign-in again for a new one.'))
+        response.end(errorPage('This sign-in attempt already completed. Start the sign-in again for a new one.', locale))
         return
       }
       // Hold the response: the tab renders the validated outcome, not the
@@ -450,6 +513,7 @@ function startCallbackServer(pending: PendingAttempt, reporter?: LoginReporter):
         arrivalDeadline = undefined
       }
       held = response
+      heldLocale = locale
       deadline = setTimeout(() => {
         finish({ ok: false, message: 'The sign-in did not complete in time. Run the sign-in again.' })
       }, CALLBACK_DEADLINE_MS)
@@ -513,6 +577,8 @@ function startCallbackServer(pending: PendingAttempt, reporter?: LoginReporter):
             finish({ ok: false, message: 'The sign-in attempt ended. Run the sign-in again to retry.' })
           }
           server.close()
+
+          server.closeAllConnections()
         },
       })
     }
@@ -533,48 +599,111 @@ function startCallbackServer(pending: PendingAttempt, reporter?: LoginReporter):
 
 const refreshInFlight = new Map<string, Promise<AccountRecord>>()
 
+/** Whether an access token is expired or inside the refresh skew window. */
+function accessTokenStale(account: AccountRecord): boolean {
+  return account.expires_at === undefined || account.expires_at - Date.now() <= REFRESH_SKEW_MS
+}
+
+/** Options for one {@link refreshAccount} call. */
+export interface RefreshOptions {
+  /**
+   * Exchange even when the stored access token is still fresh (default
+   * `true` for a direct call). A refresh another process committed after
+   * `observed` was read is reused either way, never exchanged again.
+   */
+  force?: boolean
+  /** The record the caller judged stale; read lock-free when omitted. */
+  observed?: AccountRecord
+}
+
+type RefreshOutcome =
+  | { kind: 'account'; account: AccountRecord }
+  | { kind: 'reauth'; cause?: unknown }
+
 /**
- * Refresh one account's access token, serialized per account so two
- * callers never race a rotating refresh token. The replacement token
- * set is stored together, under the store's cross-process lock.
+ * Refresh one account's access token without ever spending one rotating
+ * refresh token twice:
+ *
+ * - In process, concurrent callers for the same store file and client id
+ *   share one in-flight refresh (single flight).
+ * - Across processes, the exchange runs inside the accounts file's writer
+ *   lock. Under the lock the record is re-read; when another process already
+ *   rotated it after `observed` was read (refresh or access token changed),
+ *   or the access token is fresh again and the call is not forced, that
+ *   committed token is returned and no exchange happens. Otherwise the stored
+ *   refresh token is exchanged and the rotated set is committed atomically
+ *   before the lock is released.
+ *
+ * The lock hold is bounded: discovery runs before the lock, and the single
+ * in-lock round trip is bounded by `HTTP_TIMEOUT_MS`. A failed exchange
+ * commits nothing (the previous set stays intact), except a refresh token
+ * the issuer refuses (`invalid_grant`/`invalid_token`), whose tokens are
+ * cleared under the same lock while the registration is kept.
  */
 export async function refreshAccount(
   store: AccountsStore,
   clientId: string,
   overrides?: SiwcOverrides,
+  options?: RefreshOptions,
 ): Promise<AccountRecord> {
-  const inFlight = refreshInFlight.get(clientId)
+  const key = `${resolvePath(store.path)}\0${clientId}`
+  const inFlight = refreshInFlight.get(key)
   if (inFlight !== undefined) return inFlight
   const promise = (async (): Promise<AccountRecord> => {
-    const account = await store.account(clientId)
-    if (account === undefined || account.refresh_token === undefined) {
+    const observed = options?.observed ?? await store.account(clientId)
+    if (observed === undefined || observed.refresh_token === undefined) {
       throw new SiwcError('no refresh token stored; sign in again', 'REAUTH_REQUIRED')
     }
+    const force = options?.force !== false
+    // Network discovery stays outside the lock; only the exchange is inside.
     const endpoints = await discoverEndpoints(overrides)
-    let tokens: TokenResponse
-    try {
-      tokens = await postTokenForm(endpoints, {
-        grant_type: 'refresh_token',
-        client_id: account.client_id,
-        refresh_token: account.refresh_token,
-        resource: RESOURCE,
-      }, timedFetch(overrides?.fetchFn ?? fetch))
-    } catch (error: unknown) {
-      if (error instanceof SiwcError && (error.code === 'invalid_grant' || error.code === 'invalid_token')) {
-        // A refresh token OpenAI will not take again ends the renewable
-        // session: clear the tokens, keep the registration.
-        await store.clearTokens(clientId)
-        throw new SiwcError('ChatGPT session expired or was disconnected. Sign in again.', 'REAUTH_REQUIRED', { cause: error })
+    const fetchFn = timedFetch(overrides?.fetchFn ?? fetch, undefined, overrides?.httpTimeoutMs)
+    const outcome = await store.transact<RefreshOutcome>(async (doc) => {
+      const current = doc.accounts[clientId]
+      if (current === undefined || current.refresh_token === undefined) {
+        return { value: { kind: 'reauth' }, write: false }
       }
-      throw error
+      const rotatedElsewhere = current.refresh_token !== observed.refresh_token
+        || current.access_token !== observed.access_token
+      if (rotatedElsewhere || (!force && !accessTokenStale(current))) {
+        return { value: { kind: 'account', account: current }, write: false }
+      }
+      let tokens: TokenResponse
+      try {
+        tokens = await postTokenForm(endpoints, {
+          grant_type: 'refresh_token',
+          client_id: current.client_id,
+          refresh_token: current.refresh_token,
+          resource: RESOURCE,
+        }, fetchFn)
+      } catch (error: unknown) {
+        if (error instanceof SiwcError && (error.code === 'invalid_grant' || error.code === 'invalid_token')) {
+          // A refresh token OpenAI will not take again ends the renewable
+          // session: clear the tokens, keep the registration.
+          clearTokenFields(current)
+          return { value: { kind: 'reauth', cause: error }, write: true }
+        }
+        throw error
+      }
+      applyTokens(current, tokens as TokenSet)
+      return { value: { kind: 'account', account: current }, write: true }
+    })
+    if (outcome.kind === 'reauth') {
+      throw new SiwcError(
+        outcome.cause === undefined
+          ? 'no refresh token stored; sign in again'
+          : 'ChatGPT session expired or was disconnected. Sign in again.',
+        'REAUTH_REQUIRED',
+        outcome.cause === undefined ? undefined : { cause: outcome.cause },
+      )
     }
-    return store.saveTokens(clientId, tokens as TokenSet)
+    return outcome.account
   })()
-  refreshInFlight.set(clientId, promise)
+  refreshInFlight.set(key, promise)
   try {
     return await promise
   } finally {
-    refreshInFlight.delete(clientId)
+    refreshInFlight.delete(key)
   }
 }
 
@@ -600,9 +729,9 @@ export async function ensureAccessToken(
   if (!planGranted(account)) {
     throw new SiwcError(describeSubscriptionError('subscription_sharing_plan_not_granted'), 'PLAN_NOT_GRANTED')
   }
-  const stale = account.expires_at === undefined || account.expires_at - Date.now() <= REFRESH_SKEW_MS
-  if (stale || options?.forceRefresh === true) {
-    account = await refreshAccount(store, account.client_id, options?.overrides)
+  const force = options?.forceRefresh === true
+  if (force || accessTokenStale(account)) {
+    account = await refreshAccount(store, account.client_id, options?.overrides, { force, observed: account })
   }
   return { account, accessToken: account.access_token! }
 }
@@ -626,11 +755,12 @@ export async function logout(
   if (account.refresh_token !== undefined) {
     const endpoints = await discoverEndpoints(options?.overrides)
     if (endpoints.revocationEndpoint !== undefined) {
-      const fetchFn = timedFetch(options?.overrides?.fetchFn ?? fetch)
+      const fetchFn = timedFetch(options?.overrides?.fetchFn ?? fetch, undefined, options?.overrides?.httpTimeoutMs)
       for (let attempt = 0; attempt < 3 && !revoked; attempt++) {
         try {
           const response = await fetchFn(endpoints.revocationEndpoint, {
             method: 'POST',
+            redirect: 'error',
             headers: { 'content-type': 'application/x-www-form-urlencoded' },
             body: new URLSearchParams({
               token: account.refresh_token,
@@ -654,9 +784,10 @@ export async function logout(
 }
 
 /** One model entry from the account's live catalog. */
-export interface CatalogModel {
-  slug: string
-  displayName: string
+export type { CatalogModel } from './store.ts'
+
+export function modelCatalogEndpoint(base = API_BASE_URL): string {
+  return tokenApiUrl(base || API_BASE_URL, '/models')
 }
 
 /**
@@ -670,9 +801,11 @@ export async function fetchModels(
   overrides?: SiwcOverrides & { apiBaseUrl?: string; signal?: AbortSignal },
 ): Promise<CatalogModel[]> {
   const fetchFn = overrides?.fetchFn ?? fetch
-  const base = overrides?.apiBaseUrl ?? 'https://api.openai.com/v1'
-  const response = await fetchFn(`${base}/models`, {
+  // Origin gate before the bearer token is attached (api-origin.ts).
+  const url = modelCatalogEndpoint(overrides?.apiBaseUrl)
+  const response = await fetchFn(url, {
     headers: { authorization: `Bearer ${accessToken}` },
+    redirect: 'error',
     signal: boundedSignal(overrides?.signal),
   })
   if (!response.ok) {
@@ -687,10 +820,26 @@ export async function fetchModels(
   return rows.flatMap((entry: unknown) => {
     if (typeof entry !== 'object' || entry === null) return []
     const model = entry as Record<string, unknown>
-    if (subscription && model['visibility'] !== 'list') return []
+    if (subscription && (model['visibility'] !== 'list' || model['supported_in_api'] === false)) return []
     const slug = subscription ? model['slug'] : model['id']
     if (typeof slug !== 'string' || slug.length === 0) return []
-    return [{ slug, displayName: typeof model['display_name'] === 'string' ? model['display_name'] : slug }]
+    const levels = model['supported_reasoning_levels']
+    const efforts = Array.isArray(levels)
+      ? RESPONSES_EFFORTS.filter(effort => levels.some(level =>
+        level === effort || (typeof level === 'object' && level !== null && level.effort === effort)))
+      : undefined
+    const defaultEffort = efforts?.find(effort => effort === model['default_reasoning_level'])
+    const summaries = model['supports_reasoning_summaries']
+    const summaryParameter = model['supports_reasoning_summary_parameter']
+    const summary = summaries === false || summaryParameter === false ? false
+      : summaries === true && summaryParameter === true ? true : undefined
+    return [{
+      slug,
+      displayName: typeof model['display_name'] === 'string' ? model['display_name'] : slug,
+      ...(efforts === undefined ? {} : { reasoningEfforts: [...efforts] }),
+      ...(defaultEffort === undefined ? {} : { defaultReasoningEffort: defaultEffort }),
+      ...(summary === undefined ? {} : { supportsReasoningSummary: summary }),
+    }]
   })
 }
 

@@ -60,17 +60,17 @@ function storeConfig(): PluginConfig {
 }
 
 describe('apply', () => {
-  it('registers the chatgpt route, directory entry, discovery hook, and a settings section', () => {
+  it('registers the siwc-dsh-core route, directory entry, discovery hook, and a settings section', () => {
     const mock = mockContext()
     apply(mock.ctx as never, storeConfig())
 
     expect(mock.registerAdapter).toHaveBeenCalledTimes(1)
-    expect(mock.registerAdapter.mock.calls[0][0]).toEqual(['chatgpt'])
+    expect(mock.registerAdapter.mock.calls[0][0]).toEqual(['siwc-dsh-core'])
     expect(mock.registerAdapter.mock.calls[0][1]).toBeInstanceOf(ChatGptSiwcAdapter)
 
     expect(mock.registerConfigurableProviders).toHaveBeenCalledTimes(1)
     expect(mock.registerConfigurableProviders.mock.calls[0][0]).toEqual([
-      expect.objectContaining({ provider: 'chatgpt', settingsNs: SETTINGS_NS, settingsPath: [] }),
+      expect.objectContaining({ provider: 'siwc-dsh-core', settingsNs: SETTINGS_NS, settingsPath: [] }),
     ])
 
     expect(mock.registerModelDiscovery).toHaveBeenCalledTimes(1)
@@ -82,7 +82,7 @@ describe('apply', () => {
     mock.injected['settings'](mock.ctx)
     expect(mock.installSection).toHaveBeenCalledTimes(1)
     expect(mock.captured.ns).toBe(SETTINGS_NS)
-    expect(mock.captured.entry).toMatchObject({ provider: 'chatgpt', agentNameHint: 'DeepSeek Harness' })
+    expect(mock.captured.entry).toMatchObject({ provider: 'siwc-dsh-core', agentNameHint: 'DSH SIWC' })
 
     // Two effects hold: the registrations' teardown and the discovery offer.
     expect(mock.disposers).toHaveLength(2)
@@ -136,14 +136,32 @@ describe('apply', () => {
     mock.replaceDirectory.mockImplementationOnce(() => { throw new Error('directory collision') })
     mock.captured.hooks!.setSource(() => ({ provider: 'renamed', agentNameHint: 'DeepSeek Harness' }))
     mock.captured.hooks!.onChange()
-    expect(mock.replaceAdapter.mock.calls).toEqual([[['renamed']], [['chatgpt']]])
+    expect(mock.replaceAdapter.mock.calls).toEqual([[['renamed']], [['siwc-dsh-core']]])
   })
 
   it('rejects invalid composition before registering credentials or routes', () => {
-    for (const config of [{ provider: ' ' }, { agentNameHint: ' ' }, { reasoningEffort: 'mega' }, { apiBaseUrl: 'http://example.com/v1' }, { apiBaseUrl: 'https://user:secret@example.com/v1' }, { apiBaseUrl: 'https://example.com/v1?token=secret' }]) {
+    for (const config of [{ provider: ' ' }, { agentNameHint: ' ' }, { reasoningEffort: 'mega' }, { apiBaseUrl: 'http://example.com/v1' }, { apiBaseUrl: 'https://user:secret@example.com/v1' }, { apiBaseUrl: 'https://example.com/v1?token=secret' }, { apiBaseUrl: 'https://example.com/v1' }, { apiBaseUrl: 'https://api.openai.com.evil.com/v1' }]) {
       const mock = mockContext()
       expect(() => apply(mock.ctx as never, config)).toThrow()
       expect(mock.registerAdapter).not.toHaveBeenCalled()
+    }
+  })
+
+  it('accepts the public API origin and loopback hosts as token destinations', () => {
+    for (const apiBaseUrl of ['https://api.openai.com/v1', 'https://API.openai.com:443/v1', 'http://127.0.0.1:8787/v1', 'http://[::1]:8080/v1', 'http://localhost:3000/v1']) {
+      const mock = mockContext()
+      expect(() => apply(mock.ctx as never, { ...storeConfig(), apiBaseUrl })).not.toThrow()
+      expect(mock.registerAdapter).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('refuses a saved settings change that would send the token to another origin', () => {
+    const mock = mockContext()
+    apply(mock.ctx as never, storeConfig())
+    mock.injected['settings'](mock.ctx)
+    for (const apiBaseUrl of ['https://api.openai.com.evil.com/v1', 'https://api.openai.com./v1', 'https://api.openai.com:8443/v1']) {
+      expect(() => mock.captured.hooks!.validate({ provider: 'chatgpt', agentNameHint: 'DeepSeek Harness', apiBaseUrl }))
+        .toThrow(expect.objectContaining({ code: 'INVALID_CONFIG' }))
     }
   })
 

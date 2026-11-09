@@ -1,5 +1,7 @@
 # dsh-chatgpt-siwc
 
+English | [简体中文](README.zh-CN.md)
+
 A DeepSeek Harness plugin that serves model calls from **your own ChatGPT
 Plus/Pro plan** through the official **Sign in with ChatGPT (SIWC)**
 open-source flow: dynamic OAuth registration, then the **public Responses
@@ -49,6 +51,14 @@ Endpoints come from the OIDC discovery document
 (`https://auth.openai.com/.well-known/openid-configuration`), with the
 documented production values as fallback.
 
+Network reachability: the machine running the plugin must reach the
+endpoints above over HTTPS — `auth.openai.com` for discovery, token
+exchange and JWKS (plus whatever revocation endpoint discovery names), and
+`api.openai.com` (or the configured `apiBaseUrl`) for models and
+Responses. The browser used for sign-in must reach OpenAI's sign-in pages
+and the loopback listener on `127.0.0.1`, so it has to run on the same
+machine. The Manage usage link opens `chatgpt.com/settings/usage`.
+
 Accounts live under the Harness home — `chatgpt-siwc/accounts.json`
 (`0600`, directory `0700`) plus a non-secret `host.json` holding the
 stable host id. Writes are atomic and cross-process locked, so a rotating
@@ -56,54 +66,39 @@ refresh token cannot be spent twice by two processes.
 
 ## Install & configure
 
-The plugin ships as a Cordis plugin for the DeepSeek Harness. The bundle
-patch (`cordis.patch.yml`, referenced from `package.json` as
-`dsh.bundle.patch`) registers it with defaults:
+This is an ordinary DeepSeek Harness bundle plugin (host `>=0.2.2-rc.1 <0.3.0`). DSH stays the host; nothing here wraps, forks or launches it.
+
+**From the web client:** Plugins → install by package name, Git URL, tarball or local path → restart when DSH asks → open the plugin's card → **Sign in with ChatGPT**.
+
+**From a terminal** (the profile must precede pnpm arguments):
+
+```bash
+dsh plugin --profile web add dsh-chatgpt-siwc            # npm, once published
+dsh plugin --profile web add ./dsh-chatgpt-siwc-<ver>.tgz  # a packed tarball
+```
+
+Install the packed tarball or the npm package, not a source directory: the published `lib/` needs no build step on the host. A stale copy of this package elsewhere on Node's module path (for example an old symlink in an ancestor `node_modules`) can shadow the installed one; the plugin logs `dsh-chatgpt-siwc <version> loaded from <path>` at startup, and `dsh-chatgpt-siwc doctor` prints the same, so check it after every install.
+
+The bundle patch (`cordis.patch.yml`, referenced from `package.json` as `dsh.bundle.patch`) inserts one row:
 
 ```yaml
 - insert:
-    - id: chatgpt-siwc
+    - id: dsh-chatgpt-siwc
       name: dsh-chatgpt-siwc
       config:
-        provider: chatgpt
-        agentNameHint: DeepSeek Harness
+        provider: siwc-dsh-core
+        agentNameHint: DSH SIWC
 ```
 
-Optional config keys: `apiBaseUrl` (public API base override),
-`reasoningEffort` (effort materialized when a call names none),
-`storePath` (accounts file override), `streamIdleTimeoutMs` (maximum time between incoming stream bytes, default 120000). While a settings service is
-mounted, the whole section is live-editable from the Plugins page: a
-committed change takes effect without a restart, and renaming `provider`
-re-registers the route atomically (a refused rename keeps the previous
-route serving).
+Optional config keys: `apiBaseUrl` (only `https://api.openai.com` or a loopback host), `reasoningEffort`, `storePath` (accounts file override), `streamIdleTimeoutMs` (default 120000). Fields are volatile: a committed change applies without a restart, and renaming `provider` re-registers the route atomically.
 
-The settings card lives on the harness web client's **Plugins page**, in
-the two halves every harness card is built from. The Host half
-(`src/index.ts`) serves the `dsh-chatgpt-siwc` settings namespace through
-`ctx.settings.installSection`, which is what makes the section
-live-editable and its committed changes effective without a restart. The
-browser half (`src/client`) registers into the Plugins page's
-`plugins.item` slot and edits the namespace through the client settings
-scope — staged drafts, one save, override badges, revision-fenced
-writes — only while the Host serves the namespace. `scripts/build-client.mjs`
-builds the browser half into the harness client-module artifact
-(`window.__ModuleLoader__.load({ id, factory })` around one CJS bundle,
-with baseline platform modules as bare requires), which the harness
-client discovers from `package.json`'s `dsh.client` declaration. The
-card configures; it does not authenticate — sign-in stays in the terminal
-flow (`dsh-chatgpt-siwc login`), which the card says plainly.
+The plugin has two halves, like every DSH card. The host half (`src/index.ts`) registers the `chatgpt` LLM route and its Models-page directory entry (`nativeAuth: oauth`, so no API-key field), model discovery, and the `siwcAccount` Typert remote; inside an optional `ctx.inject(['settings'])` child it declares `settings.configure({ auto: false }, ctx.fiber)`, because it ships its own page. The browser half (`src/client`, served from the `./client` export via `dsh.client`) registers its card into the `plugins.bundle.config` slot only while `ctx.configForms` serves the `dsh-chatgpt-siwc` namespace. Plugin-list title and description are inline in `locale/en.json` and `locale/zh.json`; each locale’s `meta.detail` points to a packaged Markdown document (`docs/DETAIL.md` for English, `docs/DETAIL.zh.md` for Chinese).
 
 ## Account panel
 
-The compatible Web host exposes sign-in, account status, reauthorization,
-cancellation, refresh and sign-out on the ChatGPT Plugins card. The account
-Remote returns identity and plan-access facts without token material. A
-blocked popup leaves an authorization link in the panel. The browser and
-host must be on the same machine for the loopback callback.
+The card on the plugin page shows connection state, plan access, sign-in, reconnect, cancel, refresh and disconnect. The account remote returns identity and plan facts only, never token material. A blocked popup leaves an **Open sign-in page** link.
 
-This standalone package targets the published `0.1.6-alpha` host interfaces.
-The private native `0.2.2-rc.1` checkout uses a separate compatibility port
-for its current configuration and first-class tool-result message contracts.
+If sign-in stops, the card names the step it stopped at (for example *exchanging the approval for access*) with a machine code, and the host log carries the same line. The registration ChatGPT issues is saved **before** the one-time code exchange, so a retry reconnects the same app instead of registering another one on your ChatGPT account. The browser and DSH must run on the same machine, since the callback is `http://127.0.0.1:<port>/auth/callback`.
 
 ## CLI
 
@@ -111,11 +106,31 @@ Sign-in is interactive and lives outside the model-call path — drive it
 with the bundled CLI (or the settings card):
 
 ```bash
-dsh-chatgpt-siwc login [--name "DeepSeek Harness"] [--no-browser]
+dsh-chatgpt-siwc login [--no-browser] [--new]   # reuses this host's registration unless --new
+dsh-chatgpt-siwc doctor          # token-free JSON: loaded build, accounts file, registrations, lock, port
 dsh-chatgpt-siwc status          # token-free public view of the account
-dsh-chatgpt-siwc models          # the account's live model catalog
+dsh-chatgpt-siwc models          # rebuild the account's index; print model IDs, names, and efforts
 dsh-chatgpt-siwc logout [--purge]
+dsh-chatgpt-siwc help
 ```
+
+Human output is English or Simplified Chinese: pass `--lang zh` or
+`--lang en`, or let the CLI follow `LC_ALL` / `LC_MESSAGES` / `LANG`
+(`zh_*` selects Chinese). For example:
+
+```bash
+dsh-chatgpt-siwc status --lang zh
+LANG=zh_CN.UTF-8 dsh-chatgpt-siwc login
+```
+
+JSON output, error codes, model slugs and URLs are never translated, and
+no command prints a token.
+
+## Model index and reasoning
+
+The first picker load for an authorized account fetches its catalog from `GET /v1/models`. Later picker loads and model switches read the local account index; they do not refresh the token or query the catalog. Rebuild the default-endpoint index with `dsh-chatgpt-siwc models`, which prints model ID, name, and advertised effort IDs without printing credentials. DSH provider discovery rebuilds the index for the configured endpoint.
+
+Efforts come from the selected model's catalog entry. For example, `ultra` appears only when that model advertises it. When the endpoint returns no effort metadata, the picker does not invent options. A configured effort is sent as selected, or rejected if the cached catalog excludes it; the plugin does not silently downgrade. Reasoning summaries, where supported, are not private model reasoning.
 
 ## Wire contract
 
@@ -128,7 +143,7 @@ The serializer enforces the plan-usage contract by omission:
   becomes instructions, never an input item.
 - Never sent: `max_output_tokens`, `temperature`, `top_p`,
   `prompt_cache_retention`, `truncation`, `metadata`, `user`.
-- Function tools only — no hosted tools. Image/audio input is refused
+- Function tools only — no hosted tools. Image and file input is refused
   locally (`UNSUPPORTED_CONTENT`) rather than silently dropped.
 - Provider `subscription_sharing_*` failures (admission or mid-stream)
   surface as plain-language errors pointing at Manage usage.
@@ -154,6 +169,9 @@ abort), ID-token verification (signature, nonce, expiry, audience, key
 rotation), the OAuth client end to end against fake endpoints and a real
 loopback listener (authorize-URL contract, held outcome page, refresh
 rotation and refusal, revocation, discovery), plugin registration with
-settings-driven re-registration, and the settings card's staged form. No
+settings-driven re-registration, the settings card's staged form, and
+English/Chinese parity for every dictionary (card, errors, sign-in pages,
+CLI) with locale selection from `Accept-Language`, `--lang` and POSIX
+locale variables. No
 test uses a real endpoint or account; every control-plane fetch in tests
 goes through an injected fake.

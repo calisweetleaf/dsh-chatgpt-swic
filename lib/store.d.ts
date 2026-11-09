@@ -9,12 +9,19 @@
  *   `ext_agent_host_id` (`urn:uuid:…`). Not a secret.
  *
  * Writes are atomic and serialized through the cross-process writer lock
- * of `dsh-atomic-write`, so a rotating refresh token cannot be spent
- * twice by two processes. A group/world-readable accounts file is
+ * of `dsh-atomic-write`. A refresh holds that lock across its token
+ * exchange and re-reads the record first (see `refreshAccount`), so a
+ * rotating refresh token cannot be spent twice by two processes. A group/world-readable accounts file is
  * refused on POSIX before its contents are read.
  *
  * @module dsh-chatgpt-siwc/store
  */
+/**
+ * How long a writer waits for the accounts-file lock. The longest legitimate
+ * hold is a refresh: one token-endpoint round trip bounded by
+ * `HTTP_TIMEOUT_MS`, plus file I/O.
+ */
+export declare const STORE_LOCK_WAIT_MS: number;
 /** One ChatGPT account's registration + credential record (official record shape). */
 export interface AccountRecord {
     email?: string;
@@ -39,10 +46,8 @@ export interface AccountRecord {
     /** UTC timestamp of the latest token response. */
     saved_at: string;
     /** Last model catalog this account returned (slug + display name), for offline pickers. */
-    models?: {
-        slug: string;
-        displayName: string;
-    }[];
+    models?: CatalogModel[];
+    modelsEndpoint?: string;
 }
 /** The accounts document. */
 export interface AccountsDocument {
@@ -66,6 +71,13 @@ export interface TokenSet {
 export declare function defaultStorePath(): string;
 /** Split a space-separated scope string into a list. */
 export declare function parseScopes(scope: string | undefined): string[];
+export interface CatalogModel {
+    slug: string;
+    displayName: string;
+    reasoningEfforts?: string[];
+    defaultReasoningEffort?: string;
+    supportsReasoningSummary?: boolean;
+}
 export declare class AccountsStore {
     readonly path: string;
     constructor(path?: string);
@@ -77,6 +89,23 @@ export declare class AccountsStore {
     private writeDocument;
     /** Run one read-modify-write under the cross-process lock. */
     modify<T>(fn: (doc: AccountsDocument) => Promise<T> | T): Promise<T>;
+    /**
+     * Run one read-decide-(write) cycle under the cross-process writer lock.
+     * The document is re-read after the lock is acquired, so the decision sees
+     * every commit another process made first. `fn` may perform bounded network
+     * work (a token refresh) while holding the lock; it reports whether its
+     * changes to `doc` must be committed. A throw commits nothing, leaving the
+     * stored document exactly as it was.
+     *
+     * Every writer of this file waits up to {@link STORE_LOCK_WAIT_MS}, which
+     * exceeds the longest legitimate hold (one control-plane round trip bounded
+     * by `HTTP_TIMEOUT_MS`), so a contender waits out a refresh instead of
+     * failing while it is in flight.
+     */
+    transact<T>(fn: (doc: AccountsDocument) => Promise<{
+        value: T;
+        write: boolean;
+    }>): Promise<T>;
     /**
      * This host's stable `ext_agent_host_id`, created on first use and the
      * same for every later sign-in from this installation.
@@ -98,6 +127,16 @@ export declare class AccountsStore {
      */
     saveSignIn(record: AccountRecord): Promise<void>;
     /**
+     * Keep an issued registration (client id only, no tokens, no identity yet)
+     * the moment the callback names it, before the code exchange. Never
+     * overwrites an existing record; becomes active only when no signed-in
+     * account is active, so a failed second sign-in never displaces the first.
+     */
+    saveRegistration(input: {
+        client_id: string;
+        ext_agent_host_id: string;
+    }): Promise<void>;
+    /**
      * Replace one account's token set after a refresh. The access token,
      * expiry, scopes, and rotated refresh token move together — never
      * one without the others.
@@ -114,13 +153,12 @@ export declare class AccountsStore {
     /** Choose which registered account new requests use. */
     setActive(clientId: string): Promise<void>;
     /** Cache one account's model catalog for offline pickers. */
-    saveModels(clientId: string, models: {
-        slug: string;
-        displayName: string;
-    }[]): Promise<void>;
+    saveModels(identity: Pick<AccountRecord, 'client_id' | 'subject'>, endpoint: string, models: CatalogModel[]): Promise<void>;
 }
 /** Apply one token response onto a record, computing the absolute expiry. */
 export declare function applyTokens(account: AccountRecord, tokens: TokenSet): void;
+/** Drop one record's token set, keeping its registration and identity. */
+export declare function clearTokenFields(account: AccountRecord): void;
 /** Whether a record currently holds usable credentials. */
 export declare function isSignedIn(account: AccountRecord | undefined): account is AccountRecord;
 /** Whether the record's granted scopes include plan usage. */

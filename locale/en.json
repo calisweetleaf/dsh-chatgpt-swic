@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "ChatGPT (Sign in with ChatGPT)",
+    "description": "Use your own ChatGPT plan as a model provider. Sign in from the plugin card, approve plan access, then pick a ChatGPT model.",
+    "detail": "docs/DETAIL.md"
+  }
+}

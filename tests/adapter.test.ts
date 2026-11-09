@@ -4,7 +4,7 @@
  * plan-usage explanation, and the auth boundary holds before any request.
  */
 import { describe, expect, it, vi } from 'vitest'
-import type { StreamChunk } from '@deepseek-ai/dsh-llm'
+import { AssistantStreamAccumulator, BlockAssembler, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { ChatGptSiwcAdapter } from '../src/adapter.ts'
 import { tempStore, signedInStore } from './store-fixture.ts'
 
@@ -38,6 +38,93 @@ async function adapterWith(fetchFn: (frames: () => readonly string[]) => Promise
 }
 
 describe('ChatGptSiwcAdapter stream translation', () => {
+  it('seeds a catalog once and resolves model-specific efforts without network requests', async () => {
+    const store = await signedInStore()
+    const fetchFn = vi.fn<typeof fetch>(async () => Response.json({
+      models: [
+        { slug: 'terra-fixture', display_name: 'Terra', visibility: 'list',
+          supported_reasoning_levels: [{ effort: 'low' }, { effort: 'ultra' }],
+          default_reasoning_level: 'low',
+          supports_reasoning_summaries: true, supports_reasoning_summary_parameter: true },
+        { slug: 'luna-fixture', visibility: 'list', supported_reasoning_levels: [{ effort: 'minimal' }] },
+        { slug: 'internal-fixture', visibility: 'list', supported_in_api: false },
+      ],
+    }))
+    const adapter = new ChatGptSiwcAdapter({ store, fetchFn })
+    const provider = 'siwc-dsh-core'
+    const results = await Promise.all([adapter.listModels(provider), adapter.listModels(provider)])
+    expect(results[0].map(row => row.id)).toEqual(['terra-fixture', 'luna-fixture'])
+    expect(results[1]).toEqual(results[0])
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+    const restarted = new ChatGptSiwcAdapter({ store, fetchFn })
+    expect((await restarted.resolveModel(provider, 'terra-fixture')).reasoning?.efforts.map(row => row.id)).toEqual(['low', 'ultra'])
+    expect((await restarted.resolveModel(provider, 'luna-fixture')).reasoning?.efforts.map(row => row.id)).toEqual(['minimal'])
+    expect((await restarted.resolveModel(provider, 'unknown')).reasoning).toBeUndefined()
+    await restarted.listModels(provider)
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+    await restarted.refreshModelCatalog()
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+    await store.clearTokens((await store.active())!.client_id)
+    expect(await restarted.listModels(provider)).toEqual([])
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+  })
+  it.each(['completed', 'incomplete'] as const)('passes sparse %s usage through the native stream boundary', async (status) => {
+    const frames = [
+      sse('response.reasoning_summary_text.delta', { output_index: 0, delta: 'reason' }),
+      sse('response.output_text.delta', { output_index: 1, delta: 'answer' }),
+      sse('response.' + status, {
+        response: {
+          usage: { input_tokens: 4, output_tokens: 2, input_tokens_details: { cached_tokens: 0 } },
+          incomplete_details: status === 'incomplete' ? { reason: 'max_output_tokens' } : undefined,
+        },
+      }),
+    ]
+    const fetchFn = vi.fn<typeof fetch>(async (_url, init) => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        reasoning: { effort: 'xhigh', summary: 'auto' },
+        store: false,
+        stream: true,
+      })
+      return sseResponse(frames)
+    })
+    const adapter = new ChatGptSiwcAdapter({ store: await signedInStore(), reasoningEffort: 'xhigh', fetchFn })
+    const accumulator = new AssistantStreamAccumulator()
+    const assembler = new BlockAssembler()
+    let time = 0
+    for await (const chunk of adapter.stream({ provider: 'siwc-dsh-core', model: 'gpt-test', messages: [] })) {
+      assembler.push(accumulator.push({ time: time++, chunk }).chunk)
+    }
+    expect(assembler.usage).toStrictEqual({ inputTokens: 4, outputTokens: 2 })
+    expect(assembler.blocks()).toStrictEqual([
+      { type: 'reasoning', text: 'reason' },
+      { type: 'text', text: 'answer' },
+    ])
+    expect(assembler.finish).toStrictEqual({ kind: status === 'completed' ? 'stop' : 'max-tokens' })
+  })
+
+  it('passes a nameless tool delta through the native stream boundary before the final item names it', async () => {
+    const frames = [
+      sse('response.output_item.added', { output_index: 0, item: { type: 'function_call', call_id: 'call_1' } }),
+      sse('response.function_call_arguments.delta', { output_index: 0, delta: '{"a":' }),
+      sse('response.function_call_arguments.delta', { output_index: 0, delta: '1}' }),
+      sse('response.output_item.done', {
+        output_index: 0, item: { type: 'function_call', call_id: 'call_1', name: 'ping', arguments: '{"a":1}' },
+      }),
+      sse('response.completed', {}),
+    ]
+    const adapter = await adapterWith(async () => sseResponse(frames))
+    const accumulator = new AssistantStreamAccumulator()
+    const assembler = new BlockAssembler()
+    let time = 0
+    for await (const chunk of adapter.stream({ provider: 'siwc-dsh-core', model: 'gpt-test', messages: [] })) {
+      assembler.push(accumulator.push({ time: time++, chunk }).chunk)
+      if (chunk.type === 'tool-call-delta') expect(Object.hasOwn(chunk, 'name')).toBe(false)
+    }
+    expect(assembler.blocks()).toStrictEqual([
+      { type: 'tool-call', id: 'call_1', name: 'ping', arguments: '{"a":1}' },
+    ])
+    expect(assembler.finish).toStrictEqual({ kind: 'tool-calls' })
+  })
   it('translates a text stream to blocks, usage, and a stop finish', async () => {
     const frames = [
       sse('response.output_text.delta', { output_index: 0, delta: 'Hel' }),
@@ -260,14 +347,14 @@ describe('ChatGptSiwcAdapter stream translation', () => {
     const seenUrls: string[] = []
     const adapter = new ChatGptSiwcAdapter({
       store: () => store,
-      apiBaseUrl: () => 'https://plan.test/v1',
+      apiBaseUrl: () => 'http://127.0.0.1:8787/v1',
       fetchFn: async (input) => {
         seenUrls.push(String(input))
         return sseResponse([sse('response.completed', {})])
       },
     })
     await collect(adapter.stream({ provider: 'chatgpt', model: 'gpt-test', messages: [] }))
-    expect(seenUrls).toEqual(['https://plan.test/v1/responses'])
+    expect(seenUrls).toEqual(['http://127.0.0.1:8787/v1/responses'])
   })
 })
 

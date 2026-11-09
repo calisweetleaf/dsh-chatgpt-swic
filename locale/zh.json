@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "ChatGPT（通过 ChatGPT 登录）",
+    "description": "把你自己的 ChatGPT 套餐用作模型提供方。在插件卡片中登录并授权套餐访问，然后选择 ChatGPT 模型。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}
