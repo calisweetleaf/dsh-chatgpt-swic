@@ -58,4 +58,5 @@ export declare class ChatGptSiwcAdapter extends LlmAdapter {
     /** A non-2xx response before the stream opens (admission failure). */
     private admissionError;
     stream(options: GenerateOptions): AsyncIterable<StreamChunk>;
+    private streamRequest;
 }

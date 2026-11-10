@@ -1,6 +1,6 @@
 {
   "name": "dsh-chatgpt-siwc",
-  "version": "0.2.1-rc.3",
+  "version": "2.0.0",
   "description": "Sign in with ChatGPT provider for DeepSeek Harness · 为 DeepSeek Harness 提供 ChatGPT 登录与套餐模型接入",
   "type": "module",
   "license": "MIT",

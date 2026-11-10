@@ -50,6 +50,8 @@ export type ResponsesInputItem = {
 export interface ResponsesRequest {
     model: string;
     instructions?: string;
+    /** Stable native DSH session identity; absent for identity-free calls. */
+    prompt_cache_key?: string;
     input: ResponsesInputItem[];
     tools?: {
         type: 'function';

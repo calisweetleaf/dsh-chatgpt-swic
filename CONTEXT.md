@@ -1,5 +1,16 @@
 # Current repository context
 
+
+## Release 2.0.0 qualification
+
+The operator selected 2.0.0 as the public npm major version. Current `npm ci`, `npm run typecheck` and `npm test` passed (300 tests in 14 files). The exact 97-file package was installed through native DSH Plugins -> Add plugin -> file: in an isolated profile; one canonical component ran, the provider route was siwc-dsh-core, installed bytes matched the tarball, and English/Chinese metadata, Details and account controls were inspected. No live account operation or inference was performed in this verification. The current provider boundary retains both supported languages for plugin-owned errors because the native provider call has no viewer locale.
+
+Publication is blocked by npm authentication/permissions, NOT declared complete: whoami returned E401; an actual public/latest publish of 2.0.0 returned E404 on PUT. The qualified tarball is `/tmp/dsh-public-v2-release-SSl56o/dsh-chatgpt-siwc-2.0.0-sha256-09560a75fdba6d81f749b458b055465fd222a14c42ab0dd6ac47a3922c656b28.tgz`. Retry that exact artifact after npm login, then verify registry integrity/tag/version. The workspace release/OPERATOR_RUNBOOK.md records the companion Arrakis artifact and installed UI evidence. Older dated candidate notes below remain history, not the current gate result.
+
+## Local provider transport hardening (2026-11-09)
+
+A Luna turn recorded `fetch failed` before receiving Responses chunks, with no upstream HTTP status. The adapter now bounds the wait for headers with the configured stream timeout, distinguishes fetch rejection, timeout, and an HTTP success without a body, and preserves caller cancellation if it races a stream failure. It never retries the POST. Typecheck and 290 tests passed. The hardened tarball was qualified with stock DSH in an isolated profile alongside the separate Arrakis patch bundle; the public tag and operator web profile were not changed. The root network cause of the historical failure was not recorded.
+
 ## Candidate: account model index (2026-11-09)
 
 The pinned DSH host uses the SIWC adapter's local account catalog for warm listing and model resolution. Initial seeding and explicit native discovery use the authorized public Models endpoint. The CLI `models` command rebuilds the default-endpoint index and prints model IDs, names and advertised effort IDs only. Catalog policy does not infer an effort when the server omits metadata.

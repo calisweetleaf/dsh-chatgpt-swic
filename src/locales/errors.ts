@@ -103,6 +103,12 @@ export const errorEn = {
   providerRateLimited: 'rate limited by the provider',
   providerHttp: 'the provider answered HTTP {status}',
   streamNoTerminal: 'the Responses stream ended without a terminal event',
+  streamIdle: 'the Responses stream was idle for {timeoutMs} ms',
+  responseHeaderTimeout: 'timed out waiting for the Responses HTTP headers',
+  responseTransport: 'could not connect to the Responses API before receiving HTTP headers',
+  responseNoBody: 'the Responses API returned no stream body',
+  responseIncomplete: 'the response was incomplete ({reason})',
+  responseCancelled: 'the provider cancelled the response',
   callAborted: 'the call was aborted',
 } as const
 
@@ -188,6 +194,12 @@ export const errorZh: Record<ErrorMessageKey, string> = {
   providerRateLimited: '提供方限制了请求频率',
   providerHttp: '提供方返回了 HTTP {status}',
   streamNoTerminal: 'Responses 流在没有终止事件的情况下结束',
+  streamIdle: 'Responses 流已连续 {timeoutMs} 毫秒未收到数据',
+  responseHeaderTimeout: '等待 Responses HTTP 响应头超时',
+  responseTransport: '在收到 HTTP 响应头之前无法连接到 Responses API',
+  responseNoBody: 'Responses API 未返回流式响应体',
+  responseIncomplete: '响应未完成（{reason}）',
+  responseCancelled: '提供方取消了响应',
   callAborted: '调用已中止',
 }
 

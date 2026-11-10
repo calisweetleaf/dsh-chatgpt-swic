@@ -84,6 +84,12 @@ export declare const errorEn: {
     readonly providerRateLimited: "rate limited by the provider";
     readonly providerHttp: "the provider answered HTTP {status}";
     readonly streamNoTerminal: "the Responses stream ended without a terminal event";
+    readonly streamIdle: "the Responses stream was idle for {timeoutMs} ms";
+    readonly responseHeaderTimeout: "timed out waiting for the Responses HTTP headers";
+    readonly responseTransport: "could not connect to the Responses API before receiving HTTP headers";
+    readonly responseNoBody: "the Responses API returned no stream body";
+    readonly responseIncomplete: "the response was incomplete ({reason})";
+    readonly responseCancelled: "the provider cancelled the response";
     readonly callAborted: "the call was aborted";
 };
 /** Every human error message key. */

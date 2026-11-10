@@ -40,6 +40,8 @@ export type ResponsesInputItem =
 export interface ResponsesRequest {
   model: string
   instructions?: string
+  /** Stable native DSH session identity; absent for identity-free calls. */
+  prompt_cache_key?: string
   input: ResponsesInputItem[]
   tools?: { type: 'function'; name: string; description: string; parameters: Record<string, unknown> }[]
   tool_choice?: 'auto'
@@ -157,6 +159,7 @@ export function serializeRequest(
 
   return {
     model: options.model,
+    ...(options.sessionId ? { prompt_cache_key: String(options.sessionId) } : {}),
     ...(instructions.length > 0 ? { instructions: instructions.join('\n\n') } : {}),
     input,
     ...(options.tools !== undefined && options.tools.length > 0

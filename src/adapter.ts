@@ -33,7 +33,7 @@ import type {
 } from '@deepseek-ai/dsh-llm'
 import { tokenApiUrl } from './api-origin.ts'
 import { API_BASE_URL } from './constants.ts'
-import { describeSubscriptionError, isSubscriptionError, isUsageLimitError, SiwcError } from './errors.ts'
+import { describeSubscriptionError, isSubscriptionError, isUsageLimitError, localizeMessage, SiwcError } from './errors.ts'
 import { ensureAccessToken, fetchModels, modelCatalogEndpoint } from './oauth.ts'
 import type { SiwcOverrides } from './oauth.ts'
 import { serializeRequest } from './serialize.ts'
@@ -97,6 +97,12 @@ interface BlockState {
   callId?: string
   name?: string
   args: string
+}
+
+/** The native provider call has no viewer locale; retain both supported languages. */
+function providerMessage(message: string): string {
+  const chinese = localizeMessage(message, 'zh')
+  return chinese === message ? message : `${message}\n${chinese}`
 }
 
 /** Map any failure onto the harness error vocabulary. */
@@ -279,9 +285,21 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
   }
 
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    try {
+      yield* this.streamRequest(options)
+    } catch (error) {
+      const failure = toLlmError(error)
+      const message = providerMessage(failure.message)
+      if (message === failure.message) throw failure
+      // Both the Error and its persisted native failure carry the same text.
+      throw new LlmError(message, failure.code, { ...failure.failure, cause: failure.cause })
+    }
+  }
+
+  private async *streamRequest(options: GenerateOptions): AsyncIterable<StreamChunk> {
     const finishAborted = (): StreamChunk => ({
       type: 'finish',
-      reason: { kind: 'aborted', failure: { message: 'the call was aborted', code: 'ABORTED' } },
+      reason: { kind: 'aborted', failure: { message: providerMessage('the call was aborted'), code: 'ABORTED' } },
     })
     if (options.signal?.aborted) {
       yield finishAborted()
@@ -328,6 +346,8 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
     })
 
     let response: Response
+    const admission = new AbortController()
+    const deadline = setTimeout(() => admission.abort(), this.streamIdleTimeoutSource())
     try {
       response = await this.fetchFn(requestUrl, {
         method: 'POST',
@@ -339,16 +359,25 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
           ...attributionHeaders(),
         },
         body: JSON.stringify(body),
-        signal: options.signal,
+        signal: options.signal === undefined ? admission.signal : AbortSignal.any([options.signal, admission.signal]),
       })
     } catch (err) {
       if (options.signal?.aborted) {
         yield finishAborted()
         return
       }
-      throw toLlmError(err)
+      // A failed fetch does not establish whether the POST reached the provider.
+      // Never retry here: a second request could duplicate usage.
+      throw new LlmError(
+        admission.signal.aborted ? 'timed out waiting for the Responses HTTP headers' : 'could not connect to the Responses API before receiving HTTP headers',
+        admission.signal.aborted ? 'SIWC_RESPONSE_HEADER_TIMEOUT' : 'SIWC_RESPONSE_TRANSPORT',
+        { cause: err },
+      )
+    } finally {
+      clearTimeout(deadline)
     }
-    if (!response.ok || !response.body) throw await this.admissionError(response)
+    if (!response.ok) throw await this.admissionError(response)
+    if (response.body === null) throw new LlmError('the Responses API returned no stream body', 'SIWC_RESPONSE_NO_BODY')
 
     const blocks = new Map<number, BlockState>()
     let nextIndex = 0
@@ -555,6 +584,10 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
         }
       }
     } catch (err) {
+      if (options.signal?.aborted) {
+        yield finishAborted()
+        return
+      }
       throw toLlmError(err)
     }
 

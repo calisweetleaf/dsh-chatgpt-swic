@@ -124,6 +124,8 @@ JSON 输出、错误码、模型 slug 和 URL 始终不翻译，任何命令都�
 并把 SSE 流转换为 harness 的数据块。序列化器通过“不发送”来落实套餐用量契约：
 
 - 每个请求都带 `store: false` 和 `stream: true`。
+- 若请求包含原生 DSH 会话 ID，则将其用作 `prompt_cache_key`；无会话身份的请求不发送此字段。它不保证缓存命中。对话和时间上下文消息保留原有顺序；适配器不会向 instructions 添加时间戳。
+- 账户界面和 CLI 可选择英语或简体中文。提供方调用不携带界面语言，因此插件生成的提供方错误同时包含中英文；上游详情和机器错误码保持原样。
 - 系统提示词作为顶层 `instructions` 发送；system 消息会变成 instructions，
   而不会作为输入项。
 - 从不发送：`max_output_tokens`、`temperature`、`top_p`、

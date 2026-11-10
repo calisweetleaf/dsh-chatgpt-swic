@@ -139,6 +139,8 @@ The adapter (`src/adapter.ts`) posts `serializeRequest` output to
 The serializer enforces the plan-usage contract by omission:
 
 - `store: false` and `stream: true` on every request.
+- `prompt_cache_key` uses the native DSH session ID when present; identity-free calls omit it. It does not guarantee a cache hit. Conversation and clock-context messages retain their original order; the adapter adds no timestamps to instructions.
+- The account UI and CLI select English or Simplified Chinese. Provider calls carry no viewer locale, so plugin-authored provider errors include both languages; upstream details and machine codes remain unchanged.
 - System prompts travel as top-level `instructions`; a system message
   becomes instructions, never an input item.
 - Never sent: `max_output_tokens`, `temperature`, `top_p`,

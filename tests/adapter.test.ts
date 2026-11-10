@@ -38,6 +38,26 @@ async function adapterWith(fetchFn: (frames: () => readonly string[]) => Promise
 }
 
 describe('ChatGptSiwcAdapter stream translation', () => {
+  it('carries a stable session cache key through consecutive provider POSTs', async () => {
+    const bodies: Record<string, unknown>[] = []
+    const fetchFn = vi.fn<typeof fetch>(async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+      return sseResponse([sse('response.completed', { response: {} })])
+    })
+    const routed = new ChatGptSiwcAdapter({ store: await signedInStore(), fetchFn })
+    const sessionId = 'fixture-session' as NonNullable<Parameters<typeof routed.stream>[0]['sessionId']>
+    for (let i = 0; i < 2; i++) await collect(routed.stream({ provider: 'siwc-dsh-core', model: 'gpt-test', messages: [], sessionId }))
+    expect(bodies.map(body => body.prompt_cache_key)).toEqual([sessionId, sessionId])
+  })
+
+  it('retains bilingual provider failures and the native HTTP status and code', async () => {
+    const adapter = await adapterWith(async () => new Response('', { status: 401 }))
+    await expect(collect(adapter.stream({ provider: 'siwc-dsh-core', model: 'gpt-test', messages: [] })))
+      .rejects.toMatchObject({ code: 'AUTH', failure: { status: 401, message: expect.stringContaining('套餐令牌') }, message: expect.stringMatching(/plan token.*[\s\S]*套餐令牌/u) })
+    const disconnected = await adapterWith(async () => sseResponse([]))
+    await expect(collect(disconnected.stream({ provider: 'siwc-dsh-core', model: 'gpt-test', messages: [] })))
+      .rejects.toMatchObject({ code: 'PROVIDER_ERROR', message: expect.stringContaining('终止事件') })
+  })
   it('seeds a catalog once and resolves model-specific efforts without network requests', async () => {
     const store = await signedInStore()
     const fetchFn = vi.fn<typeof fetch>(async () => Response.json({
@@ -297,6 +317,31 @@ describe('ChatGptSiwcAdapter stream translation', () => {
     const adapter = await adapterWith(async () => sseResponse(frames))
     await expect(collect(adapter.stream({ provider: 'chatgpt', model: 'gpt-test', messages: [] })))
       .rejects.toMatchObject({ code: 'PROVIDER_ERROR', message: expect.stringContaining('ended without a terminal event') })
+  })
+
+  it('classifies a fetch failure before headers without replaying the POST', async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('fetch failed'))
+    const adapter = new ChatGptSiwcAdapter({ store: await signedInStore(), fetchFn })
+    await expect(collect(adapter.stream({ provider: 'siwc-dsh-core', model: 'gpt-test', messages: [] })))
+      .rejects.toMatchObject({ code: 'SIWC_RESPONSE_TRANSPORT' })
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('bounds the wait for headers without replaying the POST', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async (_url, options) => new Promise((_resolve, reject) => {
+      const signal = options?.signal
+      signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+    }))
+    const adapter = new ChatGptSiwcAdapter({ store: await signedInStore(), fetchFn, streamIdleTimeoutMs: 15 })
+    await expect(collect(adapter.stream({ provider: 'siwc-dsh-core', model: 'gpt-test', messages: [] })))
+      .rejects.toMatchObject({ code: 'SIWC_RESPONSE_HEADER_TIMEOUT' })
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('distinguishes a successful HTTP status with no stream body', async () => {
+    const adapter = await adapterWith(async () => new Response(null, { status: 204 }))
+    await expect(collect(adapter.stream({ provider: 'siwc-dsh-core', model: 'gpt-test', messages: [] })))
+      .rejects.toMatchObject({ code: 'SIWC_RESPONSE_NO_BODY' })
   })
 
   it('maps transport read failures to provider errors', async () => {
