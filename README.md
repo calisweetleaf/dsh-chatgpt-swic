@@ -2,6 +2,9 @@
 
 English | [简体中文](README.zh-CN.md)
 
+
+[![npm version](https://img.shields.io/npm/v/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![npm license](https://img.shields.io/npm/l/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc)
+
 A DeepSeek Harness plugin that serves model calls from **your own ChatGPT
 Plus/Pro plan** through the official **Sign in with ChatGPT (SIWC)**
 open-source flow: dynamic OAuth registration, then the **public Responses

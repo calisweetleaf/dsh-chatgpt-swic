@@ -2,6 +2,9 @@
 
 [English](README.md) | 简体中文
 
+
+[![npm 版本](https://img.shields.io/npm/v/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![npm 许可](https://img.shields.io/npm/l/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc)
+
 一个 DeepSeek Harness 插件：通过官方开源的 **Sign in with ChatGPT（SIWC）**
 流程，用**你自己的 ChatGPT Plus/Pro 套餐**服务模型调用。流程为动态 OAuth
 注册，之后使用签发的 OAuth 访问令牌调用**公共 Responses API**
