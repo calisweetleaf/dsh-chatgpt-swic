@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-[![npm 版本](https://img.shields.io/npm/v/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![npm 许可](https://img.shields.io/npm/l/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![GitHub 仓库](https://img.shields.io/badge/source-GitHub-181717?logo=github)](https://github.com/calisweetleaf/dsh-chatgpt-swic)
+[![npm 版本](https://img.shields.io/npm/v/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![npm 许可](https://img.shields.io/npm/l/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![GitHub 仓库](https://img.shields.io/badge/source-GitHub-181717?logo=github)](https://github.com/calisweetleaf/dsh-chatgpt-swic) [![XERJ 语料库贡献者](https://img.shields.io/badge/XERJ语料库-贡献者-8A2BE2)](https://hub.xerj.org/contributors/calisweetleaf)
 
 一个 DeepSeek Harness 插件：通过官方开源的 **Sign in with ChatGPT（SIWC）**
 流程，用**你自己的 ChatGPT Plus/Pro 套餐**服务模型调用。流程为动态 OAuth
