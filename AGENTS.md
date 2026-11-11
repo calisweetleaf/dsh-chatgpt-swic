@@ -2,7 +2,7 @@
 
 ## Project identity and current objective
 
-**Repository:** `dsh-chatgpt-siwc-plugin` (`dsh-chatgpt-siwc`, npm package `0.1.0`).
+**Repository:** `dsh-siwc-plugin` (`dsh-chatgpt-siwc`, npm package `0.1.0`).
 **Purpose:** A DeepSeek Harness plugin that provides a ChatGPT Sign in with
 ChatGPT (SIWC) OAuth client, a provider adapter for the public Responses API,
 a settings card, and a sign-in/status/models/logout CLI.

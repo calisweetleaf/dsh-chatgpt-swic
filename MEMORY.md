@@ -6,12 +6,6 @@
 
 ---
 
-# 2026-11-10: Public major version and native installation boundary
-
-The operator chose SIWC 2.0.0 rather than continuing the 0.2.x npm version line. Public packaging remains an ordinary npm Cordis bundle: native DSH Plugins -> Add plugin accepts a file: tarball spec with the default registry selection. A successful local install is not npm publication. The release qualification exercised that actual GUI path and checked installed bytes; npm publishing separately failed on authentication/permissions. Preserve those as distinct states.
-
-Arrakis is the existing native UI/background package, not a harness wrapper. Internal modularity must not be mistaken for a requirement that users wire up unfinished components. The experimental composer/sidebar packages are excluded from the public releases. No host rebuild, source copy, live-profile replacement or Codex-auth fallback belongs in the installation path.
-
 # 2026-10-22: Client-half contract rebuilt against the real harness
 
 ## Durable lessons

@@ -2,8 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-
-[![npm version](https://img.shields.io/npm/v/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![npm license](https://img.shields.io/npm/l/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc)
+[![npm version](https://img.shields.io/npm/v/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![npm license](https://img.shields.io/npm/l/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![GitHub repository](https://img.shields.io/badge/source-GitHub-181717?logo=github)](https://github.com/calisweetleaf/dsh-chatgpt-swic)
 
 A DeepSeek Harness plugin that serves model calls from **your own ChatGPT
 Plus/Pro plan** through the official **Sign in with ChatGPT (SIWC)**
@@ -142,8 +141,6 @@ The adapter (`src/adapter.ts`) posts `serializeRequest` output to
 The serializer enforces the plan-usage contract by omission:
 
 - `store: false` and `stream: true` on every request.
-- `prompt_cache_key` uses the native DSH session ID when present; identity-free calls omit it. It does not guarantee a cache hit. Conversation and clock-context messages retain their original order; the adapter adds no timestamps to instructions.
-- The account UI and CLI select English or Simplified Chinese. Provider calls carry no viewer locale, so plugin-authored provider errors include both languages; upstream details and machine codes remain unchanged.
 - System prompts travel as top-level `instructions`; a system message
   becomes instructions, never an input item.
 - Never sent: `max_output_tokens`, `temperature`, `top_p`,

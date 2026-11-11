@@ -28,15 +28,17 @@ import type {
   LlmModelInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
+  ReplayEnvelope,
   StreamChunk,
   TokenUsage,
 } from '@deepseek-ai/dsh-llm'
 import { tokenApiUrl } from './api-origin.ts'
 import { API_BASE_URL } from './constants.ts'
-import { describeSubscriptionError, isSubscriptionError, isUsageLimitError, localizeMessage, SiwcError } from './errors.ts'
+import { describeSubscriptionError, isSubscriptionError, isUsageLimitError, SiwcError } from './errors.ts'
 import { ensureAccessToken, fetchModels, modelCatalogEndpoint } from './oauth.ts'
 import type { SiwcOverrides } from './oauth.ts'
-import { serializeRequest } from './serialize.ts'
+import { replayKey, serializeRequest } from './serialize.ts'
+import type { SiwcReplayBlock, SiwcReplayResponse } from './serialize.ts'
 import { parseSseEvents, SseIdleTimeoutError } from './sse.ts'
 import { isSignedIn, planGranted } from './store.ts'
 import type { AccountRecord, AccountsStore, CatalogModel } from './store.ts'
@@ -77,6 +79,7 @@ interface ResponsesEventPayload {
     arguments?: string
     content?: { type?: string; text?: string; refusal?: string }[]
     summary?: { type?: string; text?: string }[]
+    encrypted_content?: string
   }
   response?: {
     usage?: ResponsesUsage
@@ -94,15 +97,12 @@ interface BlockState {
   started: boolean
   ended: boolean
   text: string
+  /** Opaque reasoning payload for replay under store:false. */
+  encrypted?: string
+  summary?: { type: 'summary_text'; text: string }[]
   callId?: string
   name?: string
   args: string
-}
-
-/** The native provider call has no viewer locale; retain both supported languages. */
-function providerMessage(message: string): string {
-  const chinese = localizeMessage(message, 'zh')
-  return chinese === message ? message : `${message}\n${chinese}`
 }
 
 /** Map any failure onto the harness error vocabulary. */
@@ -249,6 +249,9 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
       id: model,
       name: row?.displayName ?? model,
       inputModalities: ['text'],
+      // A changed system prompt is appended in history instead of rewriting
+      // message 0, which would invalidate the whole prompt cache every turn.
+      systemPromptUpdate: 'in-history',
       ...(levels.length === 0 ? {} : {
         reasoning: {
           efforts: levels.map(id => ({ id: ReasoningEffortId(id), name: id })),
@@ -285,21 +288,9 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
   }
 
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    try {
-      yield* this.streamRequest(options)
-    } catch (error) {
-      const failure = toLlmError(error)
-      const message = providerMessage(failure.message)
-      if (message === failure.message) throw failure
-      // Both the Error and its persisted native failure carry the same text.
-      throw new LlmError(message, failure.code, { ...failure.failure, cause: failure.cause })
-    }
-  }
-
-  private async *streamRequest(options: GenerateOptions): AsyncIterable<StreamChunk> {
     const finishAborted = (): StreamChunk => ({
       type: 'finish',
-      reason: { kind: 'aborted', failure: { message: providerMessage('the call was aborted'), code: 'ABORTED' } },
+      reason: { kind: 'aborted', failure: { message: 'the call was aborted', code: 'ABORTED' } },
     })
     if (options.signal?.aborted) {
       yield finishAborted()
@@ -340,14 +331,24 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
     if (effort !== undefined && catalogModel?.reasoningEfforts !== undefined && !catalogModel.reasoningEfforts.includes(effort)) {
       throw new LlmError(`unsupported reasoning effort "${effort}"`, 'UNSUPPORTED_REASONING_EFFORT')
     }
+    const key = replayKey(auth.account.client_id, auth.account.subject, options.model)
     const body = serializeRequest(options, {
       reasoningEffort: effort,
       reasoningSummary: catalogModel?.supportsReasoningSummary,
+      replayKey: key,
     })
+    /** Replay envelope for the finish chunk: only when a reasoning item is replayable. */
+    const replayState = (): { replayState?: ReplayEnvelope } => {
+      const ordered = [...blocks.values()].sort((a, b) => a.index - b.index)
+      if (!ordered.some(st => st.encrypted !== undefined)) return {}
+      const perBlock: SiwcReplayBlock[] = ordered.map(st => st.kind === 'reasoning' && st.encrypted !== undefined
+        ? { encrypted_content: st.encrypted, summary: st.summary ?? [] }
+        : null)
+      const response: SiwcReplayResponse = { v: 1, key }
+      return { replayState: { response, blocks: perBlock } }
+    }
 
     let response: Response
-    const admission = new AbortController()
-    const deadline = setTimeout(() => admission.abort(), this.streamIdleTimeoutSource())
     try {
       response = await this.fetchFn(requestUrl, {
         method: 'POST',
@@ -357,27 +358,21 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
           authorization: `Bearer ${auth.accessToken}`,
           'content-type': 'application/json',
           ...attributionHeaders(),
+          // Mirror the stable body key in the session header as an affinity hint.
+          // The provider-side cache effect is route-specific and needs live measurement.
+          ...(body.prompt_cache_key !== undefined ? { 'session-id': body.prompt_cache_key } : {}),
         },
         body: JSON.stringify(body),
-        signal: options.signal === undefined ? admission.signal : AbortSignal.any([options.signal, admission.signal]),
+        signal: options.signal,
       })
     } catch (err) {
       if (options.signal?.aborted) {
         yield finishAborted()
         return
       }
-      // A failed fetch does not establish whether the POST reached the provider.
-      // Never retry here: a second request could duplicate usage.
-      throw new LlmError(
-        admission.signal.aborted ? 'timed out waiting for the Responses HTTP headers' : 'could not connect to the Responses API before receiving HTTP headers',
-        admission.signal.aborted ? 'SIWC_RESPONSE_HEADER_TIMEOUT' : 'SIWC_RESPONSE_TRANSPORT',
-        { cause: err },
-      )
-    } finally {
-      clearTimeout(deadline)
+      throw toLlmError(err)
     }
-    if (!response.ok) throw await this.admissionError(response)
-    if (response.body === null) throw new LlmError('the Responses API returned no stream body', 'SIWC_RESPONSE_NO_BODY')
+    if (!response.ok || !response.body) throw await this.admissionError(response)
 
     const blocks = new Map<number, BlockState>()
     let nextIndex = 0
@@ -402,6 +397,8 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
         if (!st.text || (fullText.startsWith(st.text) && fullText.length > st.text.length)) st.text = fullText
       }
       if (item?.type === 'reasoning') {
+        if (typeof item.encrypted_content === 'string' && item.encrypted_content.length > 0) st.encrypted = item.encrypted_content
+        st.summary = (item.summary ?? []).map(part => ({ type: 'summary_text' as const, text: part.text ?? '' }))
         const fullText = (item.summary ?? []).map(part => part.text ?? '').join('')
         if (!st.text || (fullText.startsWith(st.text) && fullText.length > st.text.length)) st.text = fullText
       }
@@ -545,7 +542,7 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
           if (payload.response?.usage) {
             yield { type: 'usage', usage: mapUsage(payload.response.usage) }
           }
-          yield { type: 'finish', reason: { kind: sawToolCall ? 'tool-calls' : 'stop' } }
+          yield { type: 'finish', reason: { kind: sawToolCall ? 'tool-calls' : 'stop' }, ...replayState() }
           return
         }
         case 'response.incomplete': {
@@ -560,7 +557,7 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
           }
           if (payload.response?.usage) yield { type: 'usage', usage: mapUsage(payload.response.usage) }
           if (payload.response?.incomplete_details?.reason === 'max_output_tokens') {
-            yield { type: 'finish', reason: { kind: 'max-tokens' } }
+            yield { type: 'finish', reason: { kind: 'max-tokens' }, ...replayState() }
             return
           }
           throw providerError('INCOMPLETE', `the response was incomplete (${payload.response?.incomplete_details?.reason ?? 'unknown reason'})`)
@@ -584,10 +581,6 @@ export class ChatGptSiwcAdapter extends LlmAdapter {
         }
       }
     } catch (err) {
-      if (options.signal?.aborted) {
-        yield finishAborted()
-        return
-      }
       throw toLlmError(err)
     }
 

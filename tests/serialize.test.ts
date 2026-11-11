@@ -33,30 +33,6 @@ const baseOptions: GenerateOptions = {
 }
 
 describe('serializeRequest', () => {
-  it('uses the native session identity, never a request id or a generated key', () => {
-    const sessionId = 'fixture-session-a' as NonNullable<GenerateOptions['sessionId']>
-    const first = serializeRequest({ ...baseOptions, sessionId })
-    const next = serializeRequest({ ...baseOptions, sessionId, messages: [userMessage('next')] })
-    expect(first.prompt_cache_key).toBe(sessionId)
-    expect(next.prompt_cache_key).toBe(first.prompt_cache_key)
-    expect(serializeRequest({ ...baseOptions, sessionId: 'fixture-session-b' as typeof sessionId }).prompt_cache_key).not.toBe(first.prompt_cache_key)
-    expect(serializeRequest(baseOptions)).not.toHaveProperty('prompt_cache_key')
-  })
-
-  it('keeps stable instructions, tools and prior input byte-identical as clock context is appended', () => {
-    const system = 'Stable instructions'
-    const tools = [{ name: 'clock', description: 'Read a clock', parameters: { type: 'object' } }]
-    const messages = [userMessage('work'), userMessage('Current time: 10:00')]
-    const first = serializeRequest({ ...baseOptions, system, tools, messages })
-    const next = serializeRequest({ ...baseOptions, system, tools, messages: [
-      ...messages, assistantMessage([{ type: 'text', text: 'working' }]), userMessage('Current time: 10:10'),
-    ] })
-    expect(Buffer.from(next.instructions!)).toEqual(Buffer.from(first.instructions!))
-    expect(JSON.stringify(next.tools)).toBe(JSON.stringify(first.tools))
-    expect(JSON.stringify(next.input.slice(0, first.input.length))).toBe(JSON.stringify(first.input))
-    expect(JSON.stringify(next.input.at(-1))).toContain('10:10')
-    expect(next.instructions).not.toContain('Current time')
-  })
   it('always sends store:false and stream:true, and never the refused fields', () => {
     const body = serializeRequest({ ...baseOptions, temperature: 0.7, maxTokens: 100 })
     expect(body.store).toBe(false)

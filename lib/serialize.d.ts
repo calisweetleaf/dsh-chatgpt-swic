@@ -14,9 +14,20 @@
  * - Image and file input is refused locally with `UNSUPPORTED_CONTENT`
  *   rather than silently dropped.
  *
- * Reasoning blocks are not replayed: with `store: false` there is no
- * server-side state, and this plugin keeps no provider-native replay
- * envelope — assistant text and tool calls replay as plain items.
+ * Prompt caching (0.2.1-rc.5):
+ * - `prompt_cache_key` = the harness session id (hashed when longer than
+ *   64 chars), stable across every turn of one session.
+ * - The adapter mirrors this value in the `session-id` request header as a
+ *   cache-affinity hint. Cache-hit effectiveness remains route-dependent.
+ * - Only the LEADING system messages become `instructions`. A later system
+ *   message (DSH sends one when the prompt changes, because the adapter
+ *   declares `systemPromptUpdate: 'in-history'`) becomes a developer item
+ *   in place, so the cached prefix above it survives.
+ *
+ * Reasoning replay: with `store: false` there is no server-side state, so
+ * the request asks for `reasoning.encrypted_content` and the adapter keeps
+ * each completed reasoning item in the message's ReplayEnvelope. Replay
+ * only happens when the envelope's key matches this account + model.
  *
  * @module dsh-chatgpt-siwc/serialize
  */
@@ -45,13 +56,35 @@ export type ResponsesInputItem = {
     type: 'function_call_output';
     call_id: string;
     output: string;
+} | {
+    type: 'reasoning';
+    summary: {
+        type: 'summary_text';
+        text: string;
+    }[];
+    encrypted_content: string;
 };
+/** Adapter-private replay data for one response (see ReplayEnvelope). */
+export interface SiwcReplayResponse {
+    v: 1;
+    key: string;
+}
+/** One per emitted block: a reasoning block's native item, or null. */
+export type SiwcReplayBlock = {
+    encrypted_content: string;
+    summary: {
+        type: 'summary_text';
+        text: string;
+    }[];
+} | null;
+/** Stable identity for replay and caching; never contains a token or email. */
+export declare function replayKey(clientId: string, subject: string, model: string): string;
+/** The API caps prompt_cache_key; a longer session id is hashed, not cut. */
+export declare function promptCacheKey(sessionId: string): string;
 /** The wire body for `POST /v1/responses` under a plan token. */
 export interface ResponsesRequest {
     model: string;
     instructions?: string;
-    /** Stable native DSH session identity; absent for identity-free calls. */
-    prompt_cache_key?: string;
     input: ResponsesInputItem[];
     tools?: {
         type: 'function';
@@ -64,6 +97,8 @@ export interface ResponsesRequest {
         effort: string;
         summary?: 'auto';
     };
+    include?: ['reasoning.encrypted_content'];
+    prompt_cache_key?: string;
     store: false;
     stream: true;
 }
@@ -78,4 +113,5 @@ export declare const EFFORT_MAP: Readonly<Record<string, string>>;
 export declare function serializeRequest(options: GenerateOptions, defaults?: {
     reasoningEffort?: string;
     reasoningSummary?: boolean;
+    replayKey?: string;
 }): ResponsesRequest;

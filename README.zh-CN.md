@@ -2,8 +2,7 @@
 
 [English](README.md) | 简体中文
 
-
-[![npm 版本](https://img.shields.io/npm/v/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![npm 许可](https://img.shields.io/npm/l/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc)
+[![npm 版本](https://img.shields.io/npm/v/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![npm 许可](https://img.shields.io/npm/l/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![GitHub 仓库](https://img.shields.io/badge/source-GitHub-181717?logo=github)](https://github.com/calisweetleaf/dsh-chatgpt-swic)
 
 一个 DeepSeek Harness 插件：通过官方开源的 **Sign in with ChatGPT（SIWC）**
 流程，用**你自己的 ChatGPT Plus/Pro 套餐**服务模型调用。流程为动态 OAuth
@@ -127,8 +126,6 @@ JSON 输出、错误码、模型 slug 和 URL 始终不翻译，任何命令都�
 并把 SSE 流转换为 harness 的数据块。序列化器通过“不发送”来落实套餐用量契约：
 
 - 每个请求都带 `store: false` 和 `stream: true`。
-- 若请求包含原生 DSH 会话 ID，则将其用作 `prompt_cache_key`；无会话身份的请求不发送此字段。它不保证缓存命中。对话和时间上下文消息保留原有顺序；适配器不会向 instructions 添加时间戳。
-- 账户界面和 CLI 可选择英语或简体中文。提供方调用不携带界面语言，因此插件生成的提供方错误同时包含中英文；上游详情和机器错误码保持原样。
 - 系统提示词作为顶层 `instructions` 发送；system 消息会变成 instructions，
   而不会作为输入项。
 - 从不发送：`max_output_tokens`、`temperature`、`top_p`、

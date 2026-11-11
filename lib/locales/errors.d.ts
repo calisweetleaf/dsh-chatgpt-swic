@@ -71,7 +71,6 @@ export declare const errorEn: {
     readonly modelCatalogNoRows: "model catalog response contains neither models nor data";
     readonly configProviderEmpty: "provider route name must not be empty";
     readonly configAppNameEmpty: "app name must not be empty";
-    readonly catalogAccountChanged: "The signed-in account changed during catalog refresh. Refresh the model index again.";
     readonly configUnsupportedEffort: "unsupported reasoning effort \"{effort}\"";
     readonly configIdleTimeout: "stream idle timeout must be a positive integer in milliseconds";
     readonly configApiBaseInvalid: "API base URL must be an absolute URL on https://api.openai.com (or a loopback host for local testing)";
@@ -84,12 +83,6 @@ export declare const errorEn: {
     readonly providerRateLimited: "rate limited by the provider";
     readonly providerHttp: "the provider answered HTTP {status}";
     readonly streamNoTerminal: "the Responses stream ended without a terminal event";
-    readonly streamIdle: "the Responses stream was idle for {timeoutMs} ms";
-    readonly responseHeaderTimeout: "timed out waiting for the Responses HTTP headers";
-    readonly responseTransport: "could not connect to the Responses API before receiving HTTP headers";
-    readonly responseNoBody: "the Responses API returned no stream body";
-    readonly responseIncomplete: "the response was incomplete ({reason})";
-    readonly responseCancelled: "the provider cancelled the response";
     readonly callAborted: "the call was aborted";
 };
 /** Every human error message key. */

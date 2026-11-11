@@ -14,13 +14,25 @@
  * - Image and file input is refused locally with `UNSUPPORTED_CONTENT`
  *   rather than silently dropped.
  *
- * Reasoning blocks are not replayed: with `store: false` there is no
- * server-side state, and this plugin keeps no provider-native replay
- * envelope — assistant text and tool calls replay as plain items.
+ * Prompt caching (0.2.1-rc.5):
+ * - `prompt_cache_key` = the harness session id (hashed when longer than
+ *   64 chars), stable across every turn of one session.
+ * - The adapter mirrors this value in the `session-id` request header as a
+ *   cache-affinity hint. Cache-hit effectiveness remains route-dependent.
+ * - Only the LEADING system messages become `instructions`. A later system
+ *   message (DSH sends one when the prompt changes, because the adapter
+ *   declares `systemPromptUpdate: 'in-history'`) becomes a developer item
+ *   in place, so the cached prefix above it survives.
+ *
+ * Reasoning replay: with `store: false` there is no server-side state, so
+ * the request asks for `reasoning.encrypted_content` and the adapter keeps
+ * each completed reasoning item in the message's ReplayEnvelope. Replay
+ * only happens when the envelope's key matches this account + model.
  *
  * @module dsh-chatgpt-siwc/serialize
  */
 
+import { createHash } from 'node:crypto'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import { RESPONSES_EFFORTS } from './constants.ts'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
@@ -35,17 +47,42 @@ export type ResponsesInputItem =
   | { type: 'message'; role: 'assistant'; content: { type: 'output_text'; text: string }[] }
   | { type: 'function_call'; call_id: string; name: string; arguments: string }
   | { type: 'function_call_output'; call_id: string; output: string }
+  | { type: 'reasoning'; summary: { type: 'summary_text'; text: string }[]; encrypted_content: string }
+
+/** Adapter-private replay data for one response (see ReplayEnvelope). */
+export interface SiwcReplayResponse { v: 1; key: string }
+/** One per emitted block: a reasoning block's native item, or null. */
+export type SiwcReplayBlock = { encrypted_content: string; summary: { type: 'summary_text'; text: string }[] } | null
+
+/** Stable identity for replay and caching; never contains a token or email. */
+export function replayKey(clientId: string, subject: string, model: string): string {
+  return createHash('sha256').update(JSON.stringify([clientId, subject, model])).digest('hex').slice(0, 32)
+}
+
+/** The API caps prompt_cache_key; a longer session id is hashed, not cut. */
+export function promptCacheKey(sessionId: string): string {
+  return sessionId.length <= 64 ? sessionId : createHash('sha256').update(sessionId).digest('hex')
+}
+
+function replayBlocksFor(message: Message, key: string | undefined): readonly SiwcReplayBlock[] | undefined {
+  if (key === undefined || message.role !== 'assistant') return undefined
+  const state = (message.source as { replayState?: unknown }).replayState as { response?: unknown; blocks?: unknown } | undefined
+  const response = state?.response as Partial<SiwcReplayResponse> | undefined
+  if (response?.v !== 1 || response.key !== key || !Array.isArray(state?.blocks)) return undefined
+  if (state.blocks.length !== message.content.length) return undefined
+  return state.blocks as SiwcReplayBlock[]
+}
 
 /** The wire body for `POST /v1/responses` under a plan token. */
 export interface ResponsesRequest {
   model: string
   instructions?: string
-  /** Stable native DSH session identity; absent for identity-free calls. */
-  prompt_cache_key?: string
   input: ResponsesInputItem[]
   tools?: { type: 'function'; name: string; description: string; parameters: Record<string, unknown> }[]
   tool_choice?: 'auto'
   reasoning?: { effort: string; summary?: 'auto' }
+  include?: ['reasoning.encrypted_content']
+  prompt_cache_key?: string
   store: false
   stream: true
 }
@@ -79,13 +116,15 @@ function assertNoUnsupportedContent(blocks: readonly InputBlock[], where: string
  */
 export function serializeRequest(
   options: GenerateOptions,
-  defaults: { reasoningEffort?: string; reasoningSummary?: boolean } = {},
+  defaults: { reasoningEffort?: string; reasoningSummary?: boolean; replayKey?: string } = {},
 ): ResponsesRequest {
   const instructions: string[] = []
   if (options.system !== undefined && options.system.length > 0) instructions.push(options.system)
 
   const input: ResponsesInputItem[] = []
+  let leading = true
   for (const message of options.messages as readonly Message[]) {
+    if (message.role !== 'system') leading = false
     assertNoUnsupportedContent(message.content, `message ${message.id}`)
 
     if (message.role === 'tool') {
@@ -94,7 +133,17 @@ export function serializeRequest(
     }
     if (message.role === 'system') {
       const text = flattenText(message.content)
-      if (text.length > 0) instructions.push(text)
+      if (text.length === 0) continue
+      // Leading prompt → instructions; a later one stays in place so the
+      // cached prefix before it is reused.
+      if (leading) instructions.push(text)
+      else input.push({ type: 'message', role: 'developer', content: [{ type: 'input_text', text }] })
+      continue
+    }
+    if ((message.role as string) === 'developer') {
+      // Tool-change events etc.; only their text has a Responses form.
+      const text = flattenText(message.content)
+      if (text.length > 0) input.push({ type: 'message', role: 'developer', content: [{ type: 'input_text', text }] })
       continue
     }
     if (message.role === 'assistant') {
@@ -104,8 +153,13 @@ export function serializeRequest(
         input.push({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] })
         text = ''
       }
-      for (const block of message.content as readonly InputBlock[]) {
-        if (block.type === 'tool-call') {
+      const replay = replayBlocksFor(message, defaults.replayKey)
+      for (const [position, block] of (message.content as readonly InputBlock[]).entries()) {
+        const native = replay?.[position]
+        if (block.type === 'reasoning' && native && typeof native.encrypted_content === 'string') {
+          flushText()
+          input.push({ type: 'reasoning', summary: native.summary ?? [], encrypted_content: native.encrypted_content })
+        } else if (block.type === 'tool-call') {
           flushText()
           input.push({
             type: 'function_call',
@@ -159,7 +213,6 @@ export function serializeRequest(
 
   return {
     model: options.model,
-    ...(options.sessionId ? { prompt_cache_key: String(options.sessionId) } : {}),
     ...(instructions.length > 0 ? { instructions: instructions.join('\n\n') } : {}),
     input,
     ...(options.tools !== undefined && options.tools.length > 0
@@ -174,6 +227,8 @@ export function serializeRequest(
         }
       : {}),
     ...(effort !== undefined ? { reasoning: effort === 'none' || defaults.reasoningSummary === false ? { effort } : { effort, summary: 'auto' as const } } : {}),
+    ...(effort !== undefined && effort !== 'none' ? { include: ['reasoning.encrypted_content'] as ['reasoning.encrypted_content'] } : {}),
+    ...(options.sessionId !== undefined && String(options.sessionId).length > 0 ? { prompt_cache_key: promptCacheKey(String(options.sessionId)) } : {}),
     store: false,
     stream: true,
   }

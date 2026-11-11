@@ -1,6 +1,6 @@
 {
   "name": "dsh-chatgpt-siwc",
-  "version": "2.0.0",
+  "version": "2.0.2",
   "description": "Sign in with ChatGPT provider for DeepSeek Harness · 为 DeepSeek Harness 提供 ChatGPT 登录与套餐模型接入",
   "type": "module",
   "license": "MIT",
@@ -120,11 +120,12 @@
     "node": "^22.19.0 || >=24.0.0",
     "dsh": ">=0.2.2-rc.1 <0.3.0"
   },
+  "homepage": "https://github.com/calisweetleaf/dsh-chatgpt-swic#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/calisweetleaf/dsh-chatgpt-siwc.git"
+    "url": "git+https://github.com/calisweetleaf/dsh-chatgpt-swic.git"
   },
   "bugs": {
-    "url": "https://github.com/calisweetleaf/dsh-chatgpt-siwc/issues"
+    "url": "https://github.com/calisweetleaf/dsh-chatgpt-swic/issues"
   }
 }

@@ -327,7 +327,7 @@ export class AccountsStore {
     await this.modify((doc) => {
       const account = doc.accounts[identity.client_id]
       if (!isSignedIn(account) || !planGranted(account) || account.subject !== identity.subject) {
-        throw SiwcError.fromKey('catalogAccountChanged', 'CATALOG_ACCOUNT_CHANGED')
+        throw new Error('SIWC account changed during model catalog refresh')
       }
       account.models = models
       account.modelsEndpoint = endpoint

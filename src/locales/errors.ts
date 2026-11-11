@@ -88,7 +88,6 @@ export const errorEn = {
   // Configuration.
   configProviderEmpty: 'provider route name must not be empty',
   configAppNameEmpty: 'app name must not be empty',
-  catalogAccountChanged: 'The signed-in account changed during catalog refresh. Refresh the model index again.',
   configUnsupportedEffort: 'unsupported reasoning effort "{effort}"',
   configIdleTimeout: 'stream idle timeout must be a positive integer in milliseconds',
   configApiBaseInvalid: 'API base URL must be an absolute URL on https://api.openai.com (or a loopback host for local testing)',
@@ -103,12 +102,6 @@ export const errorEn = {
   providerRateLimited: 'rate limited by the provider',
   providerHttp: 'the provider answered HTTP {status}',
   streamNoTerminal: 'the Responses stream ended without a terminal event',
-  streamIdle: 'the Responses stream was idle for {timeoutMs} ms',
-  responseHeaderTimeout: 'timed out waiting for the Responses HTTP headers',
-  responseTransport: 'could not connect to the Responses API before receiving HTTP headers',
-  responseNoBody: 'the Responses API returned no stream body',
-  responseIncomplete: 'the response was incomplete ({reason})',
-  responseCancelled: 'the provider cancelled the response',
   callAborted: 'the call was aborted',
 } as const
 
@@ -180,7 +173,6 @@ export const errorZh: Record<ErrorMessageKey, string> = {
 
   configProviderEmpty: '提供方路由名称不能为空',
   configAppNameEmpty: '应用名称不能为空',
-  catalogAccountChanged: '刷新目录期间，登录账户已更改。请重新刷新模型索引。',
   configUnsupportedEffort: '不支持的推理力度“{effort}”',
   configIdleTimeout: '流空闲超时必须是以毫秒为单位的正整数',
   configApiBaseInvalid: 'API 基础 URL 必须是 https://api.openai.com 上的绝对 URL（本地测试可使用回环地址）',
@@ -194,12 +186,6 @@ export const errorZh: Record<ErrorMessageKey, string> = {
   providerRateLimited: '提供方限制了请求频率',
   providerHttp: '提供方返回了 HTTP {status}',
   streamNoTerminal: 'Responses 流在没有终止事件的情况下结束',
-  streamIdle: 'Responses 流已连续 {timeoutMs} 毫秒未收到数据',
-  responseHeaderTimeout: '等待 Responses HTTP 响应头超时',
-  responseTransport: '在收到 HTTP 响应头之前无法连接到 Responses API',
-  responseNoBody: 'Responses API 未返回流式响应体',
-  responseIncomplete: '响应未完成（{reason}）',
-  responseCancelled: '提供方取消了响应',
   callAborted: '调用已中止',
 }
 

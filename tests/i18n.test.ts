@@ -88,7 +88,6 @@ describe('the English error templates reproduce the strings other modules mint',
   for (const [key, template] of Object.entries(errorEn)) {
     if (dictionaryNative.has(key)) continue
     it(key, () => {
-      if (source.includes(`SiwcError.fromKey('${key}',`)) return
       for (const segment of template.split(/\{\w+\}/u).filter(part => part.length >= 4)) {
         expect(source.includes(segment), `"${segment}" no longer appears in src/ — update src/locales/errors.ts`).toBe(true)
       }
