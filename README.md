@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[![npm version](https://img.shields.io/npm/v/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![npm license](https://img.shields.io/npm/l/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![GitHub repository](https://img.shields.io/badge/source-GitHub-181717?logo=github)](https://github.com/calisweetleaf/dsh-chatgpt-swic)
+[![npm version](https://img.shields.io/npm/v/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![npm license](https://img.shields.io/npm/l/dsh-chatgpt-siwc)](https://www.npmjs.com/package/dsh-chatgpt-siwc) [![GitHub repository](https://img.shields.io/badge/source-GitHub-181717?logo=github)](https://github.com/calisweetleaf/dsh-chatgpt-swic) [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/calisweetleaf/badge.svg)](https://hub.xerj.org/contributors/calisweetleaf)
 
 A DeepSeek Harness plugin that serves model calls from **your own ChatGPT
 Plus/Pro plan** through the official **Sign in with ChatGPT (SIWC)**
